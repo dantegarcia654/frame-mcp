@@ -1,0 +1,189 @@
+{
+  "source_commit": "19f0abfacaf312004280203818c11c3ed4f0ebf5",
+  "files": [
+    {
+      "path": "frame/app.py",
+      "sha256": "a820f03e8e89df6e8deac62faf1122d5705001f535031e3f78486076de23c373"
+    },
+    {
+      "path": "frame/editor.py",
+      "sha256": "9cf0982309c5256efc760e93488d83f16df342b92df4bfdd426e7fd4e7d9b6f2"
+    },
+    {
+      "path": "frame/frame.css",
+      "sha256": "01c6372affc0af187f445140c737016c89043c7819c32811bd7562af596cfe95"
+    },
+    {
+      "path": "frame/frame.html",
+      "sha256": "48f13c0959b0b8763eab78ddf1631ae7d754e6867a7b325d245b1d28bfa56056"
+    },
+    {
+      "path": "frame/frame.js",
+      "sha256": "48d51bd091796bdf7b856f017e6a47914be83857dee29c5bc6ed24929482f19e"
+    },
+    {
+      "path": "frame/frame_bridge.py",
+      "sha256": "77639d17e51e48bd1480d41dd5f4d7e60be5f13d20aee9bd89ff87b90c05ae39"
+    },
+    {
+      "path": "frame/frame_core/split_screen.py",
+      "sha256": "7355d51f7377cf28b3ba18dc3682bfea5d05364114977a40366262253ee7ba14"
+    },
+    {
+      "path": "frame/frame_graphics.py",
+      "sha256": "47741a0e1ba4a25172531a7ec1f81b98b4f209e692bd4925b3049edb3645c282"
+    },
+    {
+      "path": "frame/frame_graphics_worker.py",
+      "sha256": "88038c9e399c00700e7912fc9241564eff3476f5bcc94a85b907a884cf76ccb1"
+    },
+    {
+      "path": "frame/frame_product.py",
+      "sha256": "d83e71e59d703502a5bd2834ea25c5dad9a8694bbf4d3b757edd4aa8c9570b93"
+    },
+    {
+      "path": "frame/index.html",
+      "sha256": "19c1ce7939feb82c0399526f68c4dccdfe0b9ff79459d5ffc6c8e498448a498d"
+    },
+    {
+      "path": "frame/motion/director.py",
+      "sha256": "e11147e86e387bbf0f68f0b0f99f4c400132d3a6c3bb09436a288935301f98ea"
+    },
+    {
+      "path": "frame/motion/engine.py",
+      "sha256": "046aba26554ceac0d48e8b9026fb46b2d33affa81bbf5b27b19660b2abe6715f"
+    },
+    {
+      "path": "frame/motion/graphics.py",
+      "sha256": "b89a8ee0120f83e3b35db89c4db7588a35d92b2f781bbf3d0de15ad146fdd583"
+    },
+    {
+      "path": "frame/motion/voice.py",
+      "sha256": "cbd1458ebd92cb36a3542b621b669df95975200b09c74d21871e9af66768996e"
+    },
+    {
+      "path": "frame/motion/voice_graphics.py",
+      "sha256": "fb33ee3d8e80d69742d4cc20347742bcfaf413f8f29c5340d13570861013f46a"
+    },
+    {
+      "path": "frame/pilot-login.html",
+      "sha256": "f02d8fd37890b392bf967fa27a1cb5effd3c53a50f7e44f1178574ab86ef348d"
+    },
+    {
+      "path": "frame/pilot.css",
+      "sha256": "21800eff5aebdec3061e7e2f9e667ecc768a4e8c1028815e480de7abd737a138"
+    },
+    {
+      "path": "frame/planner.py",
+      "sha256": "b9319e9d4e9eebecd9d776962a31e4e85c148187e49210a8c9f194a4c0a12576"
+    },
+    {
+      "path": "frame/playback.js",
+      "sha256": "e0c6ef560c7deefdfa2336bc290a1a4a26f0abd6f4c033b8690f2d29a7775cb0"
+    },
+    {
+      "path": "frame/proposals.py",
+      "sha256": "2b4e6af20916521969c2ac477b31dfb7dbaff5a7cedcfb92ba2eaa24fc5e643d"
+    },
+    {
+      "path": "frame/quick.html",
+      "sha256": "1e070a42b28d8ed0f38b67f406432c6eb14f893f8cb476dbe2a629c4bc66ccc8"
+    },
+    {
+      "path": "frame/quick_annotations.py",
+      "sha256": "3536f1c46317bd93656a2361aba2be52807a1888db3fe8534b302e69d60cf7b2"
+    },
+    {
+      "path": "frame/quick_assets.py",
+      "sha256": "e45c2722ce47090cd8f74860a733929a33ef8ff3c139eec520fb67a350a18c94"
+    },
+    {
+      "path": "frame/quick_import.py",
+      "sha256": "b41e9fa81b730ec41e4493a7255f33100e727117536aac1a19cd1fd01380138b"
+    },
+    {
+      "path": "frame/quick_mcp.py",
+      "sha256": "4e7d61ae38977d67a549bf8837ee39da15b82087fdf21e53a3280a45cffffad3"
+    },
+    {
+      "path": "frame/quick_revision.py",
+      "sha256": "5e2dc6576100013ac53e26102c07b69dec2feaec5ecf12ca69236e525d0e7ed3"
+    },
+    {
+      "path": "frame/quick_sections.py",
+      "sha256": "deaede8634e86486411b159b947569f0bd9f7f53b2d16ce5d1baf40cfe87031f"
+    },
+    {
+      "path": "frame/quick_timeline.py",
+      "sha256": "a9c6d712abff2dc42099ca7df5ada11a8e80f3789f3506437bd8808037a10fd8"
+    },
+    {
+      "path": "frame/review.js",
+      "sha256": "0fbba591e8d3f8f3741de393733f3644af4a38e631fa58af57a92b358c580572"
+    },
+    {
+      "path": "frame/revision.html",
+      "sha256": "07c295075018694aee5cb3e191a9dc2dff1f1ce6cce47006687f66006f951330"
+    },
+    {
+      "path": "frame/server.py",
+      "sha256": "f9970d85cdd742762a0c2ab70869ec014b0161e084ce43785eaf0278b5d84540"
+    },
+    {
+      "path": "frame/studio.html",
+      "sha256": "2c82f64d821dd29ad949c89bb6dd2a5193c7c47bdac268d5509f3db724c1a86e"
+    },
+    {
+      "path": "frame/studio.js",
+      "sha256": "966c1823c1b7079390bf0741a70325e147866e6f5ad31ab6554c65d806f68d76"
+    },
+    {
+      "path": "frame/studio.py",
+      "sha256": "19e65b74377d86d714305e22bab2c1ea45c627c16b25b7ef3f79d4bbed556499"
+    },
+    {
+      "path": "frame/studio_delivery.py",
+      "sha256": "f4f98f709e43e05daabd476afbbcf9c37e6f657b912219fd66ed42b88ceaaa0b"
+    },
+    {
+      "path": "frame/studio_director.py",
+      "sha256": "df82d42b51244ca2c6ecd0f8afa1f85ace45b4eca7d2d53c20917f4dd5bd6e53"
+    },
+    {
+      "path": "frame/studio_fish.py",
+      "sha256": "b1835548cb5d005964b0bbefaa2cad2c4221f89cd76e2146102486fffb0e9595"
+    },
+    {
+      "path": "frame/studio_fish_mcp.py",
+      "sha256": "33c7761688fb0af5d746cf6f6b4b9950a3e4cfe8280f1bcf63b8ec35079c1886"
+    },
+    {
+      "path": "frame/studio_inputs.py",
+      "sha256": "a4e6655532b05d2b8004178f097be8efa3d25f527f30eed5069f6741b3fb08ed"
+    },
+    {
+      "path": "frame/studio_mcp_voice.py",
+      "sha256": "68177cbfa0923f058aeab47dc5c4299625fab3ffae2f5ac446bb611bec3f61c7"
+    },
+    {
+      "path": "frame/studio_recording.py",
+      "sha256": "ecf4d2157cabe63a3d80ed093fe1762657d127d67ee78f175dacf1663a662d26"
+    },
+    {
+      "path": "frame/studio_render.py",
+      "sha256": "5bb379152e46278458f415215e604196bb8fa8fa5181ca09d261c712101497c3"
+    },
+    {
+      "path": "frame/studio_voice.py",
+      "sha256": "76639367f86b716a2c69a8510110fe5d0d1da9f9192189c758ae356450599308"
+    },
+    {
+      "path": "frame/timeline.html",
+      "sha256": "68189784bcbf6eb8c0d010ce472a2c8b2d959aafe393eb946a93e72dc62c7508"
+    },
+    {
+      "path": "frame/voice_graphics.py",
+      "sha256": "fb33ee3d8e80d69742d4cc20347742bcfaf413f8f29c5340d13570861013f46a"
+    }
+  ]
+}
