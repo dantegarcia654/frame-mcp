@@ -1,22 +1,16 @@
-# Developer preview validation — November 2, 2026
+# Frame 0.2.0 maintenance validation
 
-The current source snapshot was installed into a new virtual environment on an Apple Silicon Mac with Python 3.9.6. FFmpeg and ffprobe were already installed. The release copy ran independently on an alternate loopback port with empty project storage.
+Supported release scope: editing existing footage in Codex on macOS, through the local MCP tools and the matching browser fallback. Linux installation remains experimental. Host support determines whether the MCP App appears inline.
 
-Actual stdio MCP checks passed:
+Verified before publication:
 
-1. Initialize the packaged server.
-2. Discover all 16 tools through one connector.
-3. Import a newly generated three-second video with tone audio.
-4. Trim it to two seconds with the current version.
-5. Reject a stale version.
-6. Undo to the original three seconds.
-7. Redo to the two-second trim.
-8. Complete an actual FFmpeg export.
-9. Measure the output at two seconds.
-10. Verify H.264 video and AAC audio.
-11. Decode the entire exported MP4 without errors.
-12. Reject an HTTP request with an untrusted Host.
+- 76 packaged regression checks pass, covering import boundaries, timeline versions, trimming/splitting/reordering, undo/redo, notes/markup, and MCP widget transport/download contracts.
+- A fresh Codex request selected the installed video-edit skill without naming Frame. The installed local MCP tools imported footage, trimmed source seconds 1–9, split at 4, undid/redid the split, and exported an eight-second H.264/AAC MP4. A timestamped note at source second 3 persisted. The source remained unchanged.
+- A second fresh session used the packaged `frame_editor` connector while the older `frame` connector was also configured. It read the correct project and completed output.
+- The actual editor played the output and downloaded a byte-identical MP4. Its 420-pixel layout showed the video, real filmstrip, controls, and download without horizontal overflow.
+- Project files remained byte-identical across an idle stop, restart, read, and repeat preparation. Interrupted exports are marked failed once; completed timelines are not rewritten on startup.
+- Actual isolated tests reject an unrelated service, concurrent ownership of the same store, cross-origin browser writes, invalid tool requests, stale edits, and stopping active work. Queued commentary does not count as a running job.
+- Legacy project migration copies and verifies files while preserving the original backup; active legacy servers, unexpected symlinks, and interrupted migration directories fail closed.
+- Interrupted setup can resume without overwriting project data. Runtime code, environments, and projects are kept outside the plugin cache.
 
-The ChatGPT web integration was separately verified with an installed personal Frame plugin, an OpenAI Secure MCP Tunnel and an actual project read through ChatGPT. The managed tunnel reported running, healthy and ready. The original editor was also exercised through MCP import, trim, undo, redo and export from the local chat.
-
-The portable setup helper downloaded the official tunnel-client release v0.0.19 for Apple Silicon, checked its published SHA256 and extracted it successfully. Source manifest hashes match the upstream snapshot. The release builder excludes runtime files and checks for embedded API keys and developer-specific paths. Linux and Windows have not been tested; the automatic tunnel installer currently supports macOS and Linux only. This is a Python source preview, not a signed native application or an approved public ChatGPT plugin-directory listing.
+The public install command and its repeat installation are checked against the published tag before the GitHub release is made public. Local test results alone do not establish that distribution check.

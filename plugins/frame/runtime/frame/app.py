@@ -21,6 +21,7 @@ import quick_timeline
 import quick_annotations
 import quick_revision
 import quick_assets
+import quick_local
 import sys
 
 ROOT = Path(__file__).resolve().parent
@@ -28,6 +29,8 @@ WORK = ROOT / 'jobs'
 WORK.mkdir(exist_ok=True)
 MAX_UPLOAD = 700 * 1024 * 1024
 LOCK = threading.RLock()
+REQUEST_LOCK = threading.RLock()
+DRAINING = False
 TASKS = {}
 BUSY = set()
 WORKERS = threading.Semaphore(1)
@@ -238,6 +241,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
         self.send_response(206 if range_header else 200)
         self.send_header('Content-Type', ctype)
+        if ctype == 'video/mp4' and urlparse(self.path).query == 'download=1':
+            self.send_header('Content-Disposition', 'attachment; filename="Frame-export.mp4"')
         self.send_header('Content-Length', str(end-start+1))
         self.send_header('Accept-Ranges', 'bytes')
         self.send_header('Cache-Control', 'no-store')
@@ -265,6 +270,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self.local_host():
             self.close_connection = True
             return self.json(403, {'error': 'Use the loopback address.'})
+        if quick_local.route(self, sys.modules[__name__], "GET"):
+            return
         if quick_assets.route(self, sys.modules[__name__], "GET"):
             return
         if quick_revision.route(self, sys.modules[__name__], "GET"):
@@ -292,6 +299,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, (ROOT / 'playback.js').read_bytes(), 'text/javascript; charset=utf-8')
         if path == '/api/health':
             return self.json(200, {'ok': True, 'version': 6, 'planner': bool(codex_executable()),
+                                   'runtime_id': __import__('hashlib').sha256(str(ROOT.resolve()).encode()).hexdigest(),
                                    'operations':['create_split_screen', 'create_script_video', 'frame_product']})
         if path == '/api/projects':
             result = []
@@ -320,6 +328,16 @@ class Handler(BaseHTTPRequestHandler):
         return self.json(404, {'error': 'Not found'})
 
     def do_POST(self):
+        # The browser adapter forwards to this server; only its inner mutation
+        # takes the admission lock, otherwise a second HTTP thread would deadlock.
+        if urlparse(self.path).path == '/api/frame/tools':
+            return self._do_POST()
+        with REQUEST_LOCK:
+            if DRAINING:
+                return self.json(503, {'error': 'Frame is stopping safely. Reconnect after restarting.'})
+            return self._do_POST()
+
+    def _do_POST(self):
         if not self.local_host():
             self.close_connection = True
             return self.json(403, {'error': 'Use the loopback address.'})
@@ -329,6 +347,8 @@ class Handler(BaseHTTPRequestHandler):
                                       'http://localhost:%s' % self.server.server_port):
             self.close_connection = True
             return self.json(403, {'error': 'Use Katana from its local page.'})
+        if quick_local.route(self, sys.modules[__name__], "POST"):
+            return
         if quick_assets.route(self, sys.modules[__name__], "POST"):
             return
         if quick_revision.route(self, sys.modules[__name__], "POST"):
@@ -440,6 +460,13 @@ if __name__ == '__main__':
     if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
         raise SystemExit('Install FFmpeg first: brew install ffmpeg')
     port = int(os.environ.get('PORT', '8765'))
+    # One server owns this persistent store, across source versions and ports.
+    import fcntl
+    _store_lock = (WORK.resolve() / '.server.lock').open('a')
+    try:
+        fcntl.flock(_store_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit('Another Frame server owns these projects. Close its sessions and stop that server before starting a new version.')
     quick_revision.recover(sys.modules[__name__])
     quick_timeline.recover(sys.modules[__name__])
     recover_interrupted_renders()

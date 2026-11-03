@@ -184,10 +184,11 @@ def export_worker(app,pid,snapshot,eid):
 def recover(app):
     for path in app.WORK.glob('*/timeline.json'):
         with LOCK:
-            doc=json.loads(path.read_text())
+            doc=json.loads(path.read_text());changed=False
             for exp in doc['exports']:
-                if exp['status']=='working': exp.update(status='failed',error='Server restarted; export again. Your timeline is saved.')
-            write(path,doc)
+                if exp['status']=='working':
+                    exp.update(status='failed',error='Server restarted; export again. Your timeline is saved.');changed=True
+            if changed: write(path,doc)
 
 def route(handler, app, method):
     from urllib.parse import urlparse

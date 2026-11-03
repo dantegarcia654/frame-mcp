@@ -1,0 +1,6 @@
+interface:
+  display_name: "Frame video editor"
+  short_description: "Cut, annotate and export videos with Frame"
+  default_prompt: "Use $frame-video-edit to edit this video in Frame."
+policy:
+  allow_implicit_invocation: true

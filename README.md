@@ -1,54 +1,60 @@
-# Frame MCP
+# Frame for Codex
 
-Downloadable local video editor with one MCP connector for ChatGPT. Import a video, trim or split clips, move the video layer, leave source-anchored notes, undo/redo, and export MP4. The current Frame editor and its 16-tool bridge are included.
+Edit existing videos from your Codex conversation. Import footage, trim and split clips, reorder or position the video layer, save timestamped pins and frame annotations, undo/redo, and export H.264/AAC MP4.
 
-This is a developer preview for **macOS and Linux**, requiring **Python 3.9+**, **FFmpeg/ffprobe**, and an internet connection for setup. macOS is verified; Linux installation has not been exercised end to end. Manual editing and exports need no model API key. The optional in-editor Claude proposal flow requires your own installed, signed-in Claude CLI. Individual object edits and generative effects are not supported by the MCP tools.
+## Install
 
-## Install and run
-
-Download and unzip the release, then in the extracted folder:
+Paste this into Codex and ask it to run it:
 
 ```sh
-# Install FFmpeg first (macOS: brew install ffmpeg).
-python3 setup.py
-.venv/bin/python run.py
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/dantegarcia654/frame-mcp/v0.2.0/install.sh | bash'
 ```
 
-Keep that terminal running. Open **http://127.0.0.1:8876/quick** on the same computer. Use H.264/AAC MP4 footage up to five minutes / 700 MB. Projects, accepted versions, notes and uploaded creative assets persist under `frame/jobs/`; back them up using the editor’s project download. Closing the editor process stops editing and export services; start it again with the same command. Keep port 8876 available.
+Requires a current Codex CLI with plugin support, Python 3.9+, FFmpeg/ffprobe, and Git. On macOS, install missing FFmpeg with `brew install ffmpeg`. On Ubuntu, use `sudo apt install ffmpeg python3-venv`. Setup downloads Python dependencies. Manual edits and exports need no model API key, separate account, tunnel, or paid rendering service.
 
-## Connect ChatGPT web
+The release is verified on macOS. Linux uses the same installer/runtime but is experimental until its full desktop workflow is tested. Windows is unsupported by this release.
 
-Each person connects **their own** Frame instance. This download does not grant access to anyone else’s projects or ChatGPT account.
+After installation, ask Codex:
 
-1. Sign in to [OpenAI Platform Tunnels](https://platform.openai.com/settings/organization/tunnels). Create a tunnel and associate it with your ChatGPT workspace and Platform organization. Your account needs Tunnels Read + Manage to create it, and Read + Use to run it.
-2. Create a runtime API key with **Restricted → Tunnels → Read + Use**, with other endpoint permissions set to None. Do not use an admin key.
-3. Keep the editor running. In another terminal, run:
+> Edit `/absolute/path/to/video.mp4`. Keep seconds 2–8 and export it.
+
+The bundled video-edit skill allows automatic selection for ordinary video-edit requests, including requests that do not name Frame. New chats load the installed skill and MCP tools. The installer also prints the skill path and a command interface so the current installation chat can start immediately. If another connected app is also named Frame, use this plugin’s `frame_editor` local server or its bundled command interface.
+
+Frame opens beside the chat when the host supports MCP Apps. Otherwise it returns a local browser link to the same editor. Codex CLI provides the link; it cannot display an inline canvas. Open local links on the computer running the installed runtime. Conversation video handoffs and absolute local file paths are supported; the model must not invent attachment URLs.
+
+## Persistent data and recovery
+
+Projects live at `~/.local/share/frame-mcp/desktop/projects`, outside the plugin cache. Original uploads, timelines, notes, undo history, and completed exports survive reinstalling the same release and restarting its service. Back up that directory. `FRAME_DESKTOP_HOME` can select an isolated installation. Frame binds only to a dynamically selected loopback port and verifies its own runtime identity before tool calls.
+
+The bridge starts its editor when needed. A changed or occupied port fails closed. Only one server may own a project store. To update a running installation, finish exports and close old Frame chats first, then run the old installation’s printed `bootstrap.py --stop` command. It refuses active work, verifies the server identity, and retains project files. Install the new version and open a new chat. A source-version change cannot silently attach to an older server.
+
+Earlier desktop-preview data at `desktop/runtime/frame/jobs` is copied and hash-verified during installation if the old server is stopped; the original remains as a backup. Other standalone Frame folders remain separate installations and can still run. To bring footage into the new plugin, import the original video; do not overwrite another installation’s project directory.
+
+## Exact tool command fallback
+
+Use the plugin path printed by the installer:
 
 ```sh
-python3 connect_chatgpt.py tunnel_YOUR_32_HEX_CHARACTER_ID
+python3 /path/printed/by/installer/plugins/frame/bootstrap.py --doctor
+python3 /path/printed/by/installer/plugins/frame/bootstrap.py --call tools
+python3 /path/printed/by/installer/plugins/frame/bootstrap.py --call open_editor
 ```
 
-The script downloads the official OpenAI tunnel-client release when absent, verifies the published SHA256, prompts for your key without echoing it, stores it privately outside this folder, and starts the supported managed runtime. It reports running/healthy/ready.
+`--call` uses the same tools and version checks as MCP. Mutations require the current `expected_version`; re-read after a conflict. Export requests are asynchronous: poll the same project until the specific export is done, then download it from the editor. Do not start another export merely because a polling request timed out.
 
-4. In [ChatGPT Plugins](https://chatgpt.com/plugins), select **Add → Add custom MCP server**. Name it **Frame**, choose **Tunnel**, paste your tunnel ID, and choose **No authentication** (access is controlled by the OpenAI tunnel; the local stdio bridge has no additional OAuth). Create, connect, and select **Try in chat**. Account and workspace restrictions may apply.
-5. Ask: **“Use Frame to list my projects.”** Import footage in the local editor or attach it in ChatGPT when the host provides a supported attachment handoff. Then ask: **“Trim this project to source seconds 1–5 and export it.”** Review the returned project and MP4 in Frame.
+Pins, annotations, and commentary are saved editing requests. They do not automatically repaint or animate objects inside recorded footage. Whole-clip positioning changes the video layer. This release supports editing existing footage; generation and the legacy Claude proposal controls are outside its supported workflow.
 
-Keep your Mac/computer awake, the editor running, and the tunnel healthy for web calls. Use `tunnel-client runtimes status frame --json` to check the managed runtime and `tunnel-client runtimes stop frame` to stop it. A web tool connection does not embed the editor canvas inside ChatGPT; its editor link opens on the computer running Frame.
+## Privacy
 
-[Official Secure MCP Tunnel setup](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+Media remains in the installation unless you explicitly share an output or a tool returns selected content. Project metadata and selected annotated frames can be sent to your conversation. The editor’s playback transport uses app-only tool results. No user projects, credentials, browser profiles, virtual environments, or account-specific configuration are included in the source release.
 
-## Other MCP clients
+## Regression checks
 
-`setup.py` creates `mcp.json` with an absolute-path stdio entry named `frame`. Add that entry to your MCP client without replacing its existing configuration. For Codex:
+From this source checkout, with the Python dependencies installed:
 
 ```sh
-codex mcp add frame -- /absolute/path/to/Frame/.venv/bin/python /absolute/path/to/Frame/frame/quick_mcp.py
+PYTHONPATH=plugins/frame/runtime/frame python3 -m unittest discover -s tests
+python3 build_release.py
 ```
 
-Read tools report saved notes and pending proposals; reading them does not approve edits. Mutations require the current timeline version and can be undone. Moving a clip changes the whole video layer, not an object baked into the footage.
-
-## Privacy and scope
-
-The editor binds only to loopback. The tunnel lets your authorized ChatGPT workspace call the bridge; tool results and selected source-frame images can be sent to ChatGPT. Original uploads and rendered projects stay in your local installation unless a tool explicitly returns their content. Keep the installation folder writable. Do not share your runtime key or tunnel configuration.
-
-This release contains source and setup files only: no user projects, media, credentials, virtual environments, browser profiles, or account-specific tunnel identifiers. `SOURCE_MANIFEST.json` records the upstream source snapshot. This is a portable distribution of the existing manual Frame editor; older studio/generation modules are retained as internal dependencies and are outside this preview’s supported workflow.
+The release builder verifies the runtime manifest and scans the source archive for private local paths and API keys. It excludes installed environments, project data and browser state.

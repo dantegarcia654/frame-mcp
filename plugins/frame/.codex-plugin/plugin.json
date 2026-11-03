@@ -1,0 +1,20 @@
+{
+  "name": "frame",
+  "version": "0.2.0",
+  "description": "Edit existing videos in Codex: import, trim, split, annotate, undo and export MP4. Local macOS/Linux runtime; Python and FFmpeg required.",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Frame",
+    "shortDescription": "Edit videos beside your conversation",
+    "developerName": "The AGI Guide",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Open Frame so I can edit a video."
+    ]
+  },
+  "skills": "./skills/"
+}
