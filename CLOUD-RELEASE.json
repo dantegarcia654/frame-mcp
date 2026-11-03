@@ -1,0 +1,7 @@
+{
+  "version": "cloud-preview-20261102-2",
+  "archive_sha256": "93122fd90a586f51ca5a94bde4792d8e204cf7afc2e43212114979ad13cc6dd3",
+  "supported": "Cloud command-based manual editing and MP4 artifacts",
+  "embedded_cloud_panel": "unverified",
+  "installer_cloud_verification": "pending final GitHub download test"
+}
