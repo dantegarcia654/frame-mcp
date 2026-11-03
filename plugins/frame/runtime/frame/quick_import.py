@@ -98,7 +98,7 @@ def upload(base, stream, name):
             raise ValueError(data.get('error', 'Could not import footage.'))
         pid = data['id']
         return {'project_id': pid, 'name': data.get('name', name),
-                'editor_url': base + '/quick?project=' + pid + '&compact=1',
+                'editor_url': base + '/frame?project=' + pid,
                 'status': 'imported', 'next_step': 'Open editor_url to preview and edit this footage.'}
     finally:
         conn.close()

@@ -7,7 +7,7 @@ import uuid
 import quick_timeline as timeline
 import quick_revision as revision
 
-ACTIONS={'add_note','edit_note','remove_note','keep_note','apply_notes','restore_checkpoint','manual_range_edit'}
+ACTIONS={'add_note','add_annotation','edit_note','remove_note','keep_note','apply_notes','restore_checkpoint','manual_range_edit'}
 
 
 def initialize(doc):
@@ -77,19 +77,27 @@ def act(app,pid,body):
             # Preserve the complete accepted-operation journal and every playable checkpoint.
             doc['current_checkpoint_id']=target['id'];doc['version']+=1
             revision.persist(app,pid,doc);return timeline.public(doc)
-        if action=='add_note':
+        if action in ('add_note','add_annotation'):
             if len(doc['notes'])>=300:raise ValueError('Maximum 300 review notes per project.')
-            pin=section(doc,body.get('section_id'));a,b=revision.bounds(doc,pin)
-            anchor=timeline.number(body.get('source_time_ms'))
-            if int(anchor)!=anchor or not a*1000<=anchor<b*1000:raise ValueError('The note playhead must be inside the section (end excluded).')
+            text=body.get('instruction','')
+            validate_text(text)
+            annotations=None
+            if action=='add_annotation':
+                import quick_markup
+                pin,anchor,annotations=quick_markup.prepare(doc,body)
+            else:
+                pin=section(doc,body.get('section_id'));a,b=revision.bounds(doc,pin)
+                anchor=timeline.number(body.get('source_time_ms'))
+                if int(anchor)!=anchor or not a*1000<=anchor<b*1000:raise ValueError('The note playhead must be inside the section (end excluded).')
             note={'id':uuid.uuid4().hex,'project_id':pid,'section_id':pin['id'],
                   'revision_set_id':doc['active_revision_set_id'],'source_time_ms':int(anchor),
                   'base_version_id':doc.get('current_checkpoint_id','source'),
                   'output_time_ms':body.get('output_time_ms') if type(body.get('output_time_ms')) is int else None,
                   'order':max((n['order'] for n in doc['notes']),default=0)+1,'created_at':time.time(),
                   'status':'queued','included':True}
-            text=body.get('instruction','')
-            validate_text(text);note['instruction']=text;doc['notes'].append(note)
+            note['instruction']=text
+            if annotations is not None:note['annotations']=annotations
+            doc['notes'].append(note)
         elif action in ('edit_note','remove_note','keep_note'):
             note=next((n for n in doc['notes'] if n['id']==body.get('note_id')),None)
             if not note:raise ValueError('Review note not found.')

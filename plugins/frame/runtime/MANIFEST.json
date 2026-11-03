@@ -1,9 +1,8 @@
 {
-  "source_commit": "19f0abfacaf312004280203818c11c3ed4f0ebf5",
   "files": [
     {
       "path": "frame/app.py",
-      "sha256": "a820f03e8e89df6e8deac62faf1122d5705001f535031e3f78486076de23c373"
+      "sha256": "a90ee7fd09432d1f0d3a00e92794e91eb73c39068dde9ad355edd27f9a0ab145"
     },
     {
       "path": "frame/editor.py",
@@ -38,8 +37,16 @@
       "sha256": "88038c9e399c00700e7912fc9241564eff3476f5bcc94a85b907a884cf76ccb1"
     },
     {
+      "path": "frame/frame_local.html",
+      "sha256": "617b0a891ce30f49cb48d92588d4c647cf6a0c950fdf9366b081e5221c000aeb"
+    },
+    {
       "path": "frame/frame_product.py",
       "sha256": "d83e71e59d703502a5bd2834ea25c5dad9a8694bbf4d3b757edd4aa8c9570b93"
+    },
+    {
+      "path": "frame/frame_widget.html",
+      "sha256": "7b7ffd4fd36ee13253c732fefaec55beaf710cc41447dcce95e79d7210ad3676"
     },
     {
       "path": "frame/index.html",
@@ -99,23 +106,39 @@
     },
     {
       "path": "frame/quick_import.py",
-      "sha256": "b41e9fa81b730ec41e4493a7255f33100e727117536aac1a19cd1fd01380138b"
+      "sha256": "9359355ad74a12e94a65659f7df5b0efaa647ada1c0c890f1e811a9cfc2558e2"
+    },
+    {
+      "path": "frame/quick_local.py",
+      "sha256": "d0133b31d672a0e6850614cc75e92d25a2e539792fc5a9197dd846ccfec78281"
+    },
+    {
+      "path": "frame/quick_markup.py",
+      "sha256": "30799c25b611eba45e26c0c43c2193c1b4736c42a3fc8463f8b9295990e2c14b"
     },
     {
       "path": "frame/quick_mcp.py",
-      "sha256": "4e7d61ae38977d67a549bf8837ee39da15b82087fdf21e53a3280a45cffffad3"
+      "sha256": "023273ae12fea15e8e22a975f6b51b7f9e7234959c3651bd2808446141f51753"
     },
     {
       "path": "frame/quick_revision.py",
       "sha256": "5e2dc6576100013ac53e26102c07b69dec2feaec5ecf12ca69236e525d0e7ed3"
     },
     {
+      "path": "frame/quick_runtime.py",
+      "sha256": "2bcd37dfcde8e4e47df1412f6dd310386fee96b3203af24af09390ef507e5f24"
+    },
+    {
       "path": "frame/quick_sections.py",
-      "sha256": "deaede8634e86486411b159b947569f0bd9f7f53b2d16ce5d1baf40cfe87031f"
+      "sha256": "caa2d382e6e131b0de3659d86a8b1f61f1c787270973621817a7d9b7b4c0ae47"
     },
     {
       "path": "frame/quick_timeline.py",
-      "sha256": "a9c6d712abff2dc42099ca7df5ada11a8e80f3789f3506437bd8808037a10fd8"
+      "sha256": "1f5bcdfce01ccac9e2e2f52db7566907b24d7af7254f39dfa316f8130879c684"
+    },
+    {
+      "path": "frame/quick_widget.py",
+      "sha256": "079829580b30f2c7f80f2166fa77652dee323b1c7cbcb35dba981a64a0104b1e"
     },
     {
       "path": "frame/review.js",
@@ -184,6 +207,50 @@
     {
       "path": "frame/voice_graphics.py",
       "sha256": "fb33ee3d8e80d69742d4cc20347742bcfaf413f8f29c5340d13570861013f46a"
+    },
+    {
+      "path": "frame/widget/build.mjs",
+      "sha256": "62ba161106e6e37c3ab61edb1fe690fce7c4cbd0f4790875449020f07d016e27"
+    },
+    {
+      "path": "frame/widget/editor.html",
+      "sha256": "159ab9de9e2ad57678148f9f64235b70d1f27f3e60936a27febdf1df657a6667"
+    },
+    {
+      "path": "frame/widget/editor.js",
+      "sha256": "687eb9afe0239cefe1eb5bdb13f6c08870e52b0f7bb3c8bd1836072ca9e21278"
+    },
+    {
+      "path": "frame/widget/local-adapter.js",
+      "sha256": "4a8aa1fd5867960f622c2777692f18957cdf55b151cae1079afae422c7ed3e4a"
+    },
+    {
+      "path": "frame/widget/markup.js",
+      "sha256": "a823df5f4eabe02344e29fe05efc13e8f48df94a474433be701e28221ad6e484"
+    },
+    {
+      "path": "frame/widget/package-lock.json",
+      "sha256": "4d648bd3a9837f124b6a6c2cc98e471a7fda31cbbbf53ad590dd619a2e20cf28"
+    },
+    {
+      "path": "frame/widget/package.json",
+      "sha256": "245ef64dcae8d9f562ee28d2f91c57398a93789ab7ee1f404da329cefe39f60e"
+    },
+    {
+      "path": "frame/widget/section-timeline.js",
+      "sha256": "9badb16b411eb35b7dc23204b08344c7e05ac0349bd3a384c189b55d390fc24a"
+    },
+    {
+      "path": "launch_mcp.py",
+      "sha256": "9f4d1fc74e7c0f2feee407cf7b54ace926d782d37ac5854fbff92a8ae6611dad"
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "7f09e9bbce9190dfa189fa7d483061d55e03348c68d00980ff2278bf2390e79b"
+    },
+    {
+      "path": "run.py",
+      "sha256": "561a367beac53a5ec02af79fc74be972f679527dbd502b8129b8dcbe4de9debc"
     }
   ]
 }

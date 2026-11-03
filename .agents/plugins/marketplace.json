@@ -1,0 +1,20 @@
+{
+  "name": "frame-desktop",
+  "interface": {
+    "displayName": "Frame Desktop"
+  },
+  "plugins": [
+    {
+      "name": "frame",
+      "source": {
+        "source": "local",
+        "path": "./plugins/frame"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
