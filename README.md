@@ -33,7 +33,7 @@ No npm dependencies. No account. No API key. Everything runs on your machine and
 ### Claude Code
 
 ```bash
-git clone https://github.com/OWNER/frame-mcp.git && node frame-mcp/bin/frame.js install
+git clone https://github.com/dantegarcia654/frame-mcp.git && node frame-mcp/bin/frame.js install
 ```
 
 That registers Frame for your user. Open a new Claude Code session and say:
