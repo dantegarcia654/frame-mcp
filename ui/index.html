@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frame</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo"><svg viewBox="0 0 20 20" width="18" height="18"><path d="M1 6V1h5M14 1h5v5M19 14v5h-5M6 19H1v-5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="7" y="7" width="6" height="6" fill="currentColor"/></svg><b>FRAME</b></div>
+    <select id="projects" title="Projects"></select>
+    <div id="status"><i></i><span>Waiting for Claude</span></div>
+    <div class="grow"></div>
+    <label class="chk" title="Move the playhead to whatever Claude just touched"><input type="checkbox" id="follow" checked> Follow Claude</label>
+    <button id="undo" title="Undo (⌘Z)">Undo</button>
+    <button id="redo" title="Redo (⇧⌘Z)">Redo</button>
+    <button id="pause" class="solid" title="Stop Claude before its next step">Pause Claude</button>
+    <button id="render" title="Render the timeline to MP4">Render</button>
+  </header>
+
+  <main>
+    <aside id="left">
+      <h3>Media <span id="mediaCount"></span></h3>
+      <div id="bin"></div>
+      <form id="addPath"><input placeholder="Paste a file path to import…" spellcheck="false"><button>+</button></form>
+      <h3>Process <span id="stepCount"></span></h3>
+      <div id="steps"></div>
+    </aside>
+
+    <section id="center">
+      <div id="stage">
+        <div id="viewerWrap">
+          <canvas id="viewer"></canvas>
+          <video id="renderPlayer" controls playsinline hidden></video>
+          <div id="empty">
+            <svg viewBox="0 0 20 20" width="44" height="44"><path d="M1 6V1h5M14 1h5v5M19 14v5h-5M6 19H1v-5" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="7" y="7" width="6" height="6" fill="currentColor"/></svg>
+            <p><b>Frame is ready.</b></p>
+            <p>Ask Claude to edit a video.<br>Everything it does will appear here as it happens.</p>
+          </div>
+          <div id="renderBar" hidden><span></span><i></i></div>
+        </div>
+        <div id="inspector"></div>
+      </div>
+      <div id="transport">
+        <button id="play" title="Play / pause (Space)">▶</button>
+        <span id="tc">00:00.00</span><span class="dim">/</span><span id="dur" class="dim">00:00.00</span>
+        <div class="grow"></div>
+        <button id="backToTimeline" hidden>← Back to timeline</button>
+        <span class="dim" id="viewMode">Live preview</span>
+      </div>
+    </section>
+
+    <aside id="right">
+      <h3>Claude <span class="dim" id="feedHint">decisions, live</span></h3>
+      <div id="feed"></div>
+      <form id="composer">
+        <textarea rows="2" placeholder="Tell Claude what to change…  (Enter to send)"></textarea>
+        <div><span class="dim" id="pending">Claude reads this at its next step.</span><button class="solid">Send</button></div>
+      </form>
+    </aside>
+  </main>
+
+  <footer id="timeline">
+    <div id="tlbar">
+      <span class="dim">Timeline</span>
+      <span id="tlinfo" class="dim"></span>
+      <div class="grow"></div>
+      <span class="dim keys">Space play · S split · ⌫ delete · ⇧⌫ ripple delete · drag to move · drag edges to trim</span>
+      <button id="fit">Fit</button>
+      <input type="range" id="zoom" min="0" max="100" value="0" title="Zoom">
+    </div>
+    <div id="tlbody">
+      <div id="heads"></div>
+      <div id="scroll"><div id="lanes"><div id="ruler"></div><div id="rows"></div><div id="playhead"></div><div id="markers"></div></div></div>
+    </div>
+  </footer>
+</div>
+<div id="cursor"><svg viewBox="0 0 12 16" width="12" height="16"><path d="M0 0v13l3.6-3.2L6 16l2.2-.9-2.4-6H11z" fill="#fff" stroke="#000"/></svg><span>Claude</span></div>
+<div id="modal" hidden><div class="sheet"><button id="closeModal">Close</button><h2></h2><div class="meta"></div><pre></pre></div></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

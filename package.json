@@ -1,0 +1,12 @@
+{
+  "name": "frame-mcp",
+  "version": "1.0.0",
+  "description": "Frame — the live editing room for Claude. Every cut, grade, caption and render Claude makes shows up on a real timeline you can watch, steer and edit by hand.",
+  "type": "module",
+  "bin": { "frame": "bin/frame.js", "frame-mcp": "bin/frame.js" },
+  "files": ["bin", "src", "ui", "scripts", "README.md", "LICENSE"],
+  "scripts": { "start": "node bin/frame.js serve", "test": "node test/smoke.js" },
+  "keywords": ["mcp", "claude", "video", "editing", "ffmpeg", "timeline"],
+  "license": "MIT",
+  "engines": { "node": ">=18" }
+}
