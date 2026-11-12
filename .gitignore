@@ -1,4 +1,5 @@
 node_modules
 .DS_Store
 *.tgz
-demo/frame-demo-raw.mp4
+demo/*-raw.mp4
+demo/*.marks.json

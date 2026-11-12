@@ -105,14 +105,18 @@ function cutRange(p, from, to, tracks, ripple) {
 /** Map transcript words through the cuts on a track, so captions follow the edit. */
 export function timelineWords(p, track) {
   const words = [];
+  let prev = null, run = 0;
   for (const c of trackClips(p, track)) {
+    // Clips that continue the same source without a jump (a shot split in two) count as one run for phrasing.
+    if (!(prev && prev.asset === c.asset && Math.abs(prev.out - c.in) < 0.02 && Math.abs(end(prev) - c.start) < 0.02)) run++;
+    prev = c;
     const tr = p.assets[c.asset]?.transcript;
     if (!tr) continue;
     for (const w of tr.words) {
       const mid = (w.start + w.end) / 2;
       if (mid < c.in || mid >= c.out) continue;
       const s = c.start + (Math.max(w.start, c.in) - c.in) / c.speed, e = c.start + (Math.min(w.end, c.out) - c.in) / c.speed;
-      words.push({ text: w.text, start: round(s, 2), end: round(Math.max(e, s + 0.05), 2), clip: c.id });
+      words.push({ text: w.text, start: round(s, 2), end: round(Math.max(e, s + 0.05), 2), clip: run });
     }
   }
   return words.sort((a, b) => a.start - b.start);

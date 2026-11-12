@@ -8,6 +8,8 @@ Frame is an MCP server. It does not add a new AI or a new kind of video; it give
 
 ![Frame](demo/frame-screenshot.jpg)
 
+**48-second demo:** [demo/frame-hackathon-demo.mp4](demo/frame-hackathon-demo.mp4)
+
 ## What you get
 
 - **A window that opens by itself** when Claude starts an edit.
@@ -100,7 +102,7 @@ frame call <tool> '<json>'   call any tool from a shell
 frame stop       stop the local service
 ```
 
-`scripts/record.mjs` records the window to an MP4 using the Chrome already installed, which is how the demo was made.
+`scripts/record.mjs` records the window to an MP4 using the Chrome already installed; `--script demo/shots.mjs` drives the page with a scripted mouse while it records. That is how the demo was made.
 
 Environment: `FRAME_PORT` (default 4747), `FRAME_HOME` (default `~/.frame`), `FRAME_PACE` (ms between visible operations, default 140), `FRAME_NO_OPEN=1` (do not open a browser).
 
