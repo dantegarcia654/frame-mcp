@@ -10,6 +10,8 @@ Frame is an MCP server. It does not add a new AI or a new kind of video; it give
 
 **48-second demo:** [demo/frame-hackathon-demo.mp4](demo/frame-hackathon-demo.mp4)
 
+**Working on Frame, or pointing an AI at it?** Start with [AGENTS.md](AGENTS.md): how to run, test, read and change it, with the design reasoning in [docs/](docs).
+
 ## What you get
 
 - **A window that opens by itself** when Claude starts an edit.
