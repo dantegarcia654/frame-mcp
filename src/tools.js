@@ -15,7 +15,9 @@ How to work:
 The user's hands are on the same timeline. EVERY tool result may end with a "FROM THE USER" block — messages typed in Frame, manual trims/moves, pause. Treat that as the user speaking to you: obey it before continuing. If you are paused, stop and call frame_wait.
 
 Magnetic timeline: clips on V1 stay packed. Trimming, extending, deleting or dragging a V1 clip ripples everything after it, so there are never gaps or overlaps to fix (pass ripple:false on an op to opt out, or set_project {magnetic:false} to turn it off). Prefer trim_clip / extend_clip over hand-editing in/out.\n\nUnits: all times are seconds. Clips have "start" (timeline), "in"/"out" (source). Tracks: V1 is the base video layer, V2/V3 stack on top, T1 is text, A1–A3 are audio-only. Video clips carry their own audio.
-Be honest: Frame's numbers are measured. Never tell the user something was checked unless a tool result shows it.`;
+Be honest: Frame's numbers are measured. Never tell the user something was checked unless a tool result shows it.
+
+Style profile: frame_start returns the user's style profile when one exists (their editing rules, plus mistakes already made and fixed). Follow it before showing the user any cut, so no AI repeats a correction the user already made. Re-read it with frame_profile.`;
 
 const pid = { project_id: { type: 'string', description: 'Optional. Defaults to the open project.' } };
 const why = { why: { type: 'string', description: 'One short sentence shown to the user explaining this choice.' } };
@@ -31,6 +33,15 @@ export const TOOLS = [
       plan: { type: 'string', description: 'Your editing plan in a few lines. Shown to the user at the top of the feed.' },
       project_id: { type: 'string', description: 'Reopen an existing project instead of creating one.' },
       action: { type: 'string', enum: ['list'], description: '"list" returns saved projects without opening anything.' },
+      profile: { type: 'string', description: 'Style profile name: a plain-text file ~/.frame/profiles/<name>.md shared by every AI and every Frame install. Default "default" (used only if that file exists). Its rules are returned and must be followed.' },
+    } },
+  },
+  {
+    name: 'frame_profile',
+    description: "Read the user's style profile: their editing rules and the mistakes already made and fixed. frame_start returns it too. Read it before captioning, cutting or rendering if you have not seen it this session. Profiles are plain Markdown files in ~/.frame/profiles (FRAME_PROFILES overrides the folder).",
+    inputSchema: { type: 'object', properties: {
+      name: { type: 'string', description: 'Profile name. Default: the open project\'s profile, else "default".' },
+      action: { type: 'string', enum: ['show', 'list'], description: '"list" names every saved profile. Default "show".' },
     } },
   },
   {
@@ -71,6 +82,7 @@ Ops:
 • extend_clip {id, edge?:"start"|"end", by | all:true} — lengthen a clip using the REST OF THE SOURCE FOOTAGE beyond its current in/out (all:true = every second left). Magnetic: later clips slide out of the way. Each clip in the timeline listing shows how much footage is left before/after it. If none is left, nothing changes and it says so.
 • update_clip {id, + clip props} — trim (in/out), move (start/track), or change any property. Keys it does not change are rejected, not ignored.
 • replace_source {id, asset, in?} — put different footage in a clip's slot (e.g. cut to another camera angle): start, length, track and effects stay the same.
+• slip_clip {id, by | in} — show a different moment of the recording in the same slot: start and length stay, in/out move together (by = source seconds, + = later; stops at the ends of the footage). Video and audio clips only.
 • split_clip {id, at} — at = timeline seconds.
 • delete_clip {id | ids, ripple?} — ripple true closes the gap on all tracks, "track" only on its own track.
 • cut_range {from, to, tracks?, ripple?} — remove a span of the timeline (default: every track, gap closed).

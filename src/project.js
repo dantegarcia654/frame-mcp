@@ -250,6 +250,19 @@ export function applyOp(p, a, ctx = {}) {
       if (a.label !== undefined) c.label = a.label;
       return { text: `${label(p, c)} · source ${was.asset} ${tc(was.in)}–${tc(was.out)} → ${c.asset} ${tc(c.in)}–${tc(c.out)} · start ${tc(c.start)} and length ${round(d, 3)}s unchanged`, clipIds: [c.id], t: c.start };
     }
+    case 'slip_clip': {
+      // Slip: the clip keeps its place and its length on the timeline; a different moment of the recording plays inside it.
+      const c = getClip(p, a.id);
+      if (c.kind === 'text' || c.kind === 'image') throw new Error(`slip_clip works on video and audio clips; ${label(p, c)} is ${c.kind}. Nothing was changed.`);
+      if (a.by == null && a.in == null) throw new Error('slip_clip needs by (source seconds; + plays a later moment) or in (the new source in-point).');
+      const asset = p.assets[c.asset], len = round(c.out - c.in), want = a.in != null ? Number(a.in) : c.in + Number(a.by);
+      if (!Number.isFinite(want)) throw new Error('by and in must be numbers.');
+      const to = round(clamp(want, 0, Math.max(0, asset.duration - len)));
+      if (Math.abs(to - c.in) < EPS) return { text: `${label(p, c)} — no more footage ${want < c.in ? 'before' : 'after'} this range (source ${tc(c.in)}–${tc(c.out)} of ${tc(asset.duration)}), nothing changed`, clipIds: [c.id], t: c.start };
+      const was = { in: c.in, out: c.out }; c.in = to; c.out = round(to + len);
+      const stopped = Math.abs(to - want) >= EPS ? ` (stopped at the ${want < to ? 'start' : 'end'} of the footage)` : '';
+      return { text: `${label(p, c)} · slipped ${to - was.in > 0 ? '+' : ''}${round(to - was.in)}s${stopped} · source ${tc(was.in)}–${tc(was.out)} → ${tc(c.in)}–${tc(c.out)} · start ${tc(c.start)} and length ${round(dur(c), 3)}s unchanged`, clipIds: [c.id], t: c.start };
+    }
     case 'trim_clip': case 'extend_clip': {
       const c = getClip(p, a.id); if (c.kind === 'text') throw new Error(`${op} works on footage clips; use update_clip with duration for text.`);
       const asset = p.assets[c.asset], edge = a.edge || 'end';
