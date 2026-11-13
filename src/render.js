@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process';
 import { round } from './util.js';
 import { dur, end, projectDuration } from './project.js';
+import { textKey } from '../ui/text-draw.js';
 
 const even = (n) => Math.max(2, Math.round(n / 2) * 2);
 const f = (n) => String(round(n, 4));
@@ -30,7 +31,7 @@ function gradeFilters(g) {
  * @param p project
  * @param o.window [t0,t1] timeline seconds (default whole project)
  * @param o.still  render one frame at window[0]
- * @param o.rasters { clipId: {file,x,y} } text overlays rasterised by the UI
+ * @param o.rasters { clipId: {file,x,y,hash} } drawn captions (ui/text-draw.js, by the window or headless Chrome); stale ones are skipped
  * @param o.assetPath (asset) => absolute path
  */
 export function buildGraph(p, o) {
@@ -53,7 +54,9 @@ export function buildGraph(p, o) {
     if (o.still) opacity *= fadeFactor(c, t0);
     if (c.kind === 'text') {
       const r = o.rasters?.[c.id];
-      if (!r) { warnings.push(`Text "${c.text.content.slice(0, 24)}" (${c.id}) has no raster yet — open the Frame window so it can draw the text, then render again.`); continue; }
+      if (!r) { warnings.push(`Text "${c.text.content.slice(0, 24)}" (${c.id}) has not been drawn, so it is not in this output.`); continue; }
+      // Never composite a caption drawn from older text or style: that is how a restyle "succeeds" and the old look ships.
+      if (r.hash !== textKey(c, W, H)) { warnings.push(`Text "${c.text.content.slice(0, 24)}" (${c.id}) changed since it was drawn, so it is not in this output.`); continue; }
       idx = addInput(['-loop', '1', '-framerate', String(FPS), '-t', f(Math.max(le - ls, 1 / FPS)), '-i', r.file]);
       chain.push('format=rgba'); X = r.x; Y = r.y;
     } else {
@@ -105,7 +108,7 @@ export function buildGraph(p, o) {
   });
   let aLabel = null;
   if (!o.still) {
-    const tail = `apad,atrim=0:${f(D)}${o.loudnorm ? ',loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000' : ''}[aout]`;
+    const tail = `apad,atrim=0:${f(D)}${o.loudnorm ? ',loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.84:level=disabled,aresample=48000' : ''}[aout]`;
     if (!outs.length) filters.push(`anullsrc=r=48000:cl=stereo,atrim=0:${f(D)}[aout]`);
     else if (outs.length === 1) filters.push(`${outs[0]}${tail}`);
     else filters.push(`${outs.join('')}amix=inputs=${outs.length}:normalize=0:dropout_transition=0,${tail}`);

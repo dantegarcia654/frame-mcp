@@ -31,7 +31,9 @@ The export, and the frames the AI inspects with `frame_view`, come from one filt
 ### 5. The window draws the text
 The ffmpeg build on the development machine had no `drawtext` filter, and font rendering differs between ffmpeg and a browser anyway. So the window rasterises each text clip with the same function it uses for preview and uploads a PNG; ffmpeg overlays it. Preview and render match to the pixel.
 
-*Cost:* rendering text needs a window open. The tools wait briefly for rasters and warn when they are missing.
+When no window is open, the service runs that same drawing file (`ui/text-draw.js`) in headless Chrome with a throwaway profile, so text no longer needs a window. Every drawn caption records the text and style it came from, and the renderer refuses to overlay one that is out of date. Before this, a restyle made with the window closed reported success while the old look was still composited and exported.
+
+*Cost:* without a window, drawing text needs a Chromium-based browser on the machine (found automatically, or `FRAME_CHROME`). A headless draw takes about a second. Window and headless drawings agree in size and position; antialiased edges can differ by a few values in a fraction of a percent of pixels (GPU vs software rasterisation).
 
 ### 6. The human talks to the AI through tool results
 An MCP server cannot push a message into a model that is mid-thought. The dependable channel is the result of the model's next tool call. So everything the human does (messages, manual edits, pause) lands in an inbox, and every tool result ends with it under a heading that tells the model to act on it first. `frame_wait` exists for when the model should stop and listen.

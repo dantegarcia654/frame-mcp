@@ -8,7 +8,9 @@ node test/smoke.js
 
 It starts a private service (port 4791, temporary data folder, no browser), generates a 6-second test clip with ffmpeg, and checks: start, import with measured silences, a batch of edits including one deliberate failure, a composited still, a user message reaching the AI, pause blocking edits, a draft render that produces a playable file, undo, and rejection of a request from a foreign origin.
 
-It does not cover: the browser UI, text clips (they need a window), Whisper, chroma key, real footage, long timelines.
+It also checks, since the truthful-pixels change: captions drawn with no window open, a restyle showing its new colour with no window, a stale caption never being composited, `update_clip` rejecting keys it does not apply, `replace_source` keeping the slot, and gap reporting. The headless text checks are skipped (and say so) when no Chromium browser is installed.
+
+It does not cover: the browser UI, Whisper, chroma key, real footage, long timelines.
 
 ## Run an isolated instance for your own tests
 

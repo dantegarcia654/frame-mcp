@@ -33,7 +33,8 @@ export async function probe(file) {
   if (a) info.acodec = a.codec_name;
   if (kind === 'image') { info.duration = 0; info.hasAudio = false; }
   // Browsers cannot play every codec/container; those get a small H.264 proxy for preview only.
-  info.needsProxy = kind === 'video' && (!WEB_VCODECS.has(info.vcodec) || /\.(mkv|avi|mts|mxf)$/i.test(file));
+  // Also proxy anything bigger than ~720p: several 1080p/4K H.264 streams decoding at once is what makes in-browser playback stutter.
+  info.needsProxy = kind === 'video' && (!WEB_VCODECS.has(info.vcodec) || /\.(mkv|avi|mts|mxf)$/i.test(file) || Math.max(info.width || 0, info.height || 0) > 1280);
   return info;
 }
 
@@ -51,7 +52,7 @@ export async function makeThumbs(file, info, outFile) {
 }
 
 export async function makeProxy(file, outFile) {
-  await run('ffmpeg', ['-v', 'error', '-y', '-i', file, '-vf', 'scale=-2:720', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', outFile]);
+  await run('ffmpeg', ['-v', 'error', '-y', '-i', file, '-vf', 'scale=-2:720', '-r', '30', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28', '-g', '10', '-keyint_min', '10', '-sc_threshold', '0', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', outFile]); // keyframe every ~0.33 s: scrubbing and clip jumps seek instantly
 }
 
 /** Decode to 8 kHz mono and measure 50 peak + RMS windows per second. */
@@ -84,6 +85,31 @@ export function findSilences(env, { threshold_db = -38, min_silence = 0.35 } = {
   env.rms.forEach((v, i) => { if (v < thr) { if (start == null) start = i; } else push(i); });
   push(env.rms.length);
   return out;
+}
+
+/**
+ * Adaptive pause finder. Unlike findSilences (fixed dBFS), this measures the clip's own noise floor and
+ * speech level, so a noisy room or quiet talker still gets sensible cuts. Uses hysteresis so breaths and
+ * soft consonants at word edges are not mistaken for silence.
+ * Returns { threshold_db, floor_db, speech_db, pauses:[{start,end}] } (source seconds, unpadded).
+ */
+export function findPauses(env, { threshold_db, min_silence = 0.45, from = 0, to = Infinity } = {}) {
+  const a = Math.max(0, Math.floor(from * env.rate)), b = Math.min(env.rms.length, Math.ceil(to * env.rate));
+  const db = env.rms.slice(a, b).map((v) => 20 * Math.log10(Math.max(v, 1e-5)));
+  if (db.length < 5) return { threshold_db: null, floor_db: null, speech_db: null, pauses: [] };
+  const sorted = [...db].sort((x, y) => x - y), q = (f) => sorted[Math.min(sorted.length - 1, Math.floor(f * sorted.length))];
+  const floor = q(0.1), speech = q(0.92);
+  let thr = threshold_db;
+  if (thr == null) thr = Math.min(Math.max(floor + Math.max(7, 0.3 * (speech - floor)), -52), -28);
+  const hi = thr + 4; // hysteresis: once in a pause, stay there until clearly louder than the threshold
+  const pauses = []; let start = null, inPause = false;
+  const close = (i) => { if (start != null && (i - start) / env.rate >= min_silence) pauses.push({ start: round(from + start / env.rate, 3), end: round(from + i / env.rate, 3) }); start = null; };
+  db.forEach((v, i) => {
+    if (!inPause && v < thr) { inPause = true; start = i; }
+    else if (inPause && v > hi) { inPause = false; close(i); }
+  });
+  if (inPause) close(db.length);
+  return { threshold_db: round(thr, 1), floor_db: round(floor, 1), speech_db: round(speech, 1), pauses };
 }
 
 export async function loudness(file) {

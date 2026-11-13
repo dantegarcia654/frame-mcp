@@ -24,6 +24,7 @@ Frame is an MCP server. It does not add a new AI or a new kind of video; it give
 - **Steering** — type a message in the window, or press Pause. Claude receives it at its next step.
 - **Nothing hidden** — work Claude does outside the timeline (a script, an ffmpeg command, an AI generation) is logged in a Process panel with the exact code.
 - **Measured, not guessed** — loudness, silences, durations and render results come from ffmpeg and are reported as numbers.
+- **Camera Move (v1.1, prototype)** — `frame_camera_move` turns a still into a push-in, pull-out, orbit, parallax or dolly-zoom clip using a local depth model (Depth-Anything-V2-Small). It is a 2.5D parallax move, not a true 3D world. Needs python3 with `torch transformers opencv-python pillow`.
 - **Black and white.**
 
 ## Requirements
@@ -85,6 +86,7 @@ Projects live in `~/.frame`. Renders go to `~/Movies/Frame` (`~/Videos/Frame` on
 | `frame_import` | Adds video, audio or images; measures loudness and silences. |
 | `frame_transcribe` | Word-level transcript (local Whisper), or accepts supplied words. |
 | `frame_note` | Shows Claude's thinking and decisions in the feed. |
+| `frame_cut_silence` | One-call dead-air removal. Adaptive to each clip's own noise floor, `natural`/`tight`/`aggressive` styles, `dry_run` preview. |
 | `frame_edit` | Timeline operations, applied live: add, keep ranges, trim, split, move, delete, cut range, remove silences, text, captions, grade, chroma key, scale/position, speed, volume, fades. |
 | `frame_step` | Logs work done outside Frame with its exact code and imports the outputs. |
 | `frame_view` | Returns composited frames (or raw source frames) so Claude can look at its work. |
@@ -97,7 +99,7 @@ Projects live in `~/.frame`. Renders go to `~/Movies/Frame` (`~/Videos/Frame` on
 
 - Effects are the ones listed above. No keyframed animation, no motion tracking, no transitions beyond fades, no generative effects built in. Claude can still do those elsewhere and bring the result in through `frame_step`.
 - The live preview approximates chroma key and plays volume above 100% at 100%; rendered frames and the export are exact.
-- Text needs the Frame window open at render time, because the window draws it.
+- Text is drawn by the Frame window, or, when no window is open, by a headless Chromium-based browser (Chrome, Chromium, Edge or Brave; set `FRAME_CHROME` to choose one). Without either, a render with text refuses rather than export missing captions.
 - Your message reaches Claude at its next tool call, not mid-thought. Pause stops further edits; it cannot interrupt a render already running.
 - One project is on screen at a time.
 - Tested on macOS and Windows 11 (Whisper transcripts not yet on Windows). Linux should work.

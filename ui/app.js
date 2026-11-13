@@ -1,4 +1,5 @@
 // Frame UI. Shows the daemon's project state live, previews the timeline in real time, and lets the human edit the same timeline.
+import { drawText, rasterText, textKey } from './text-draw.js';
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -67,7 +68,26 @@ function renderStatus() {
 setInterval(renderStatus, 1000);
 
 // ───────────────────────── bin + steps
+// Audio packs: sounds and soundtracks saved inside Frame. Click ▶ to hear one, + to add it to the project's bin.
+let packsBusy = 0, packsSig = '', previewAudio = null;
+async function loadPacks() {
+  if (Date.now() - packsBusy < 1500) return; packsBusy = Date.now();
+  let r; try { r = await (await fetch('/api/packs')).json(); } catch { return; }
+  const sig = JSON.stringify(r.packs.map((p) => [p.id, p.updatedAt])); if (sig === packsSig) return; packsSig = sig;
+  const box = $('#packs'); if (!box) return; box.innerHTML = ''; $('#packCount').textContent = r.packs.reduce((n, p) => n + p.items.length, 0) || '';
+  for (const pk of r.packs) {
+    const h = el('div', 'pk', `<b>${esc(pk.name)}</b> <span class="dim">${pk.items.length}</span>`); box.append(h);
+    for (const it of pk.items) {
+      const row = el('div', 'pkItem', `<span class="nm">${esc(it.name)}</span><span class="dim">${it.kind} · ${it.duration}s</span>`); row.title = it.desc || it.source || '';
+      const play = el('button', '', '▶'), add = el('button', '', '+');
+      play.onclick = () => { previewAudio?.pause(); previewAudio = new Audio(`/pack/${encodeURIComponent(pk.id)}/${encodeURIComponent(it.file)}`); previewAudio.volume = 0.6; previewAudio.play().catch(() => {}); };
+      add.onclick = () => post({ action: 'pack_use', pack: pk.id, item: it.id });
+      row.append(play, add); box.append(row);
+    }
+  }
+}
 function renderBin() {
+  loadPacks();
   const bin = $('#bin'); bin.dataset.empty = 'Nothing imported yet.';
   const assets = Object.values(P.assets);
   $('#mediaCount').textContent = assets.length || '';
@@ -243,7 +263,7 @@ function startDrag(e, raw) {
     if (c.in != null) op.in = r3(c.in);
     if (c.out != null) { if (stretch) op.duration = r3(c.out); else op.out = r3(c.out); }
     Object.assign(raw, c);
-    post({ action: 'ops', ops: [op] }).finally(() => { drag = null; });
+    post({ action: 'ops', ops: [op] }).finally(() => { drag = null; renderTimeline(); }); // re-render: the server may have rippled the timeline differently from the drop position
   };
   addEventListener('mousemove', move); addEventListener('mouseup', up);
 }
@@ -404,27 +424,6 @@ function drawVisual(src, sw0, sh0, c, t) {
   } else { ctx.filter = filter; ctx.drawImage(src, x, y, w, h); }
   ctx.filter = 'none'; ctx.globalAlpha = 1;
 }
-/** Draw a text clip. Used for the preview and for the raster ffmpeg composites, so both look the same. */
-function drawText(g, c, W, H) {
-  const s = c.text, px = s.size * H;
-  g.font = `${s.weight} ${px}px ${s.font}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round';
-  const maxW = s.maxWidth * W, lines = [];
-  for (const para of (s.uppercase ? s.content.toUpperCase() : s.content).split('\n')) {
-    let line = '';
-    for (const word of para.split(/\s+/)) { const tryL = line ? `${line} ${word}` : word; if (line && g.measureText(tryL).width > maxW) { lines.push(line); line = word; } else line = tryL; }
-    lines.push(line);
-  }
-  const lh = px * 1.2, bw = Math.max(...lines.map((l) => g.measureText(l).width)), bh = lines.length * lh;
-  const cx = s.x * W, cy = s.y * H, pad = s.bg ? px * 0.35 : 0, sw = (s.stroke ? s.strokeWidth : 0) * px;
-  if (s.bg) { g.fillStyle = s.bg; g.beginPath(); g.roundRect(cx - bw / 2 - pad * 1.3, cy - bh / 2 - pad * 0.6, bw + pad * 2.6, bh + pad * 1.2, px * 0.18); g.fill(); }
-  lines.forEach((l, i) => {
-    const y = cy - bh / 2 + lh * (i + 0.5);
-    if (s.stroke && sw > 0) { g.strokeStyle = s.stroke; g.lineWidth = sw; g.strokeText(l, cx, y); }
-    g.fillStyle = s.color; g.fillText(l, cx, y);
-  });
-  const m = Math.ceil(sw + pad * 1.4 + px * 0.25);
-  return { x: Math.floor(cx - bw / 2 - m), y: Math.floor(cy - bh / 2 - m), w: Math.ceil(bw + m * 2), h: Math.ceil(bh + m * 2) };
-}
 function tick() {
   if (!P || renderView) return;
   sizeViewer();
@@ -463,20 +462,18 @@ setInterval(() => {
   bins.forEach((b, i) => { const hh = Math.min(sc.height, (b / mx) * sc.height); g.fillRect(i * 4, sc.height - hh, 3, hh); });
 }, 300);
 
-// Text is rasterised here and uploaded, so the ffmpeg render uses exactly the pixels you previewed.
+// Text is rasterised here (ui/text-draw.js) and uploaded, so the render uses exactly the pixels you previewed.
+// With no window open, the service draws the same file in headless Chrome instead (src/text.js).
 const rasterBusy = new Set();
 async function rasterizeTexts() {
   for (const c of P.clips) {
     if (c.kind !== 'text') continue;
-    const hash = JSON.stringify([c.text, P.width, P.height]);
+    const hash = textKey(c, P.width, P.height);
     if (P.rasters?.[c.id]?.hash === hash || rasterBusy.has(c.id + hash)) continue;
     rasterBusy.add(c.id + hash);
-    const full = new OffscreenCanvas(P.width, P.height), g = full.getContext('2d');
-    const r = drawText(g, c, P.width, P.height);
-    const x = clamp(r.x, 0, P.width - 2), y = clamp(r.y, 0, P.height - 2), w = clamp(r.w, 2, P.width - x), h = clamp(r.h, 2, P.height - y);
-    const crop = new OffscreenCanvas(w, h); crop.getContext('2d').drawImage(full, x, y, w, h, 0, 0, w, h);
-    const blob = await crop.convertToBlob({ type: 'image/png' });
-    fetch(`/api/raster?project=${P.id}&clip=${c.id}&x=${x}&y=${y}`, { method: 'POST', body: blob }).finally(() => setTimeout(() => rasterBusy.delete(c.id + hash), 3000));
+    const { x, y, canvas } = rasterText(c, P.width, P.height, (w, h) => new OffscreenCanvas(w, h));
+    const blob = await canvas.convertToBlob({ type: 'image/png' });
+    fetch(`/api/raster?project=${P.id}&clip=${c.id}&x=${x}&y=${y}`, { method: 'POST', headers: { 'X-Frame-Text-Key': encodeURIComponent(hash) }, body: blob }).finally(() => setTimeout(() => rasterBusy.delete(c.id + hash), 3000));
   }
 }
 
