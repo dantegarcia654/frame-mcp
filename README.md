@@ -12,6 +12,8 @@ Frame is an MCP server. It does not add a new AI or a new kind of video; it give
 
 **Working on Frame, or pointing an AI at it?** Start with [AGENTS.md](AGENTS.md): how to run, test, read and change it, with the design reasoning in [docs/](docs).
 
+**Research reference:** [YC / Sazabi conversation (November 12, 2026)](docs/YC-SAZABI-CONVERSATION-2026-11-12.md) — archived discussion of proactive issue detection for FRAME, including an explicitly hypothetical demo.
+
 ## What you get
 
 - **A window that opens by itself** when Claude starts an edit.
