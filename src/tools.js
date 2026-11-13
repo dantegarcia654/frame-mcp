@@ -126,7 +126,7 @@ Text style: size (fraction of frame height, default 0.055), color, stroke, strok
     description: 'Render the timeline to an MP4 with ffmpeg (H.264 + AAC). The user sees progress and can play the result in Frame. Returns the file path and measured duration, size and loudness. quality "draft" is half-resolution and fast; "final" is full resolution. Audio is normalised to −14 LUFS unless loudnorm is false.',
     inputSchema: { type: 'object', properties: {
       quality: { type: 'string', enum: ['draft', 'final'] }, loudnorm: { type: 'boolean' },
-      output_dir: { type: 'string', description: 'Folder for the MP4. Default ~/Movies/Frame.' }, ...why, ...pid,
+      output_dir: { type: 'string', description: 'Folder for the MP4. Default ~/Movies/Frame (~/Videos/Frame on Windows).' }, ...why, ...pid,
     } },
   },
 ];

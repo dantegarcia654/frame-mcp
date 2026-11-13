@@ -224,7 +224,10 @@ export function applyOp(p, a, ctx = {}) {
       for (const c of trackClips(p, track)) {
         const env = ctx.loadEnv?.(c.asset); if (!env) continue;
         for (const s of findSilences(env, { threshold_db: a.threshold_db ?? -38, min_silence: a.min_silence ?? 0.45 })) {
-          const si = Math.max(s.start + pad, c.in), so = Math.min(s.end - pad, c.out);
+          // Air is only kept next to sound. A silence that runs into the clip's start or end has none on that side,
+          // so cut it flush; padding there would leave a few frames of dead air as their own clip.
+          const si = s.start <= c.in + 0.05 ? c.in : Math.max(s.start + pad, c.in);
+          const so = s.end >= c.out - 0.05 ? c.out : Math.min(s.end - pad, c.out);
           if (so - si < 0.12) continue;
           ranges.push([c.start + (si - c.in) / c.speed, c.start + (so - c.in) / c.speed]);
         }
