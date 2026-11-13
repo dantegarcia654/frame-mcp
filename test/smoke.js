@@ -66,6 +66,46 @@ try {
   r = await call('frame_edit', { ops: [{ op: 'trim_clip', id: ids[0], edge: 'start', by: 0.3 }, { op: 'delete_clip', id: ids[1] }] });
   ok('trim and delete leave no gaps', /Trimmed start/.test(r.text) && /closed the gap/.test(r.text) && !/ c_\w+ · [1-9]/.test('') && /0–1\.2s/.test(r.text), r.text.split('\n').slice(0, 2).join(' | ').slice(0, 200));
 
+  // ── Truthful pixels: captions are drawn without a window, and a restyle can never ship the old look.
+  const { findChrome } = await import('../src/text.js');
+  const countPixels = (b64, test) => { // count pixels in a frame_view JPEG that pass test(r, g, b)
+    const jpg = path.join(tmp, `look_${Date.now()}.jpg`); fs.writeFileSync(jpg, Buffer.from(b64, 'base64'));
+    const raw = spawnSync('ffmpeg', ['-v', 'error', '-i', jpg, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 64e6 }).stdout;
+    let n = 0; for (let i = 0; i < raw.length; i += 3) if (test(raw[i], raw[i + 1], raw[i + 2])) n++; return n;
+  };
+  const redPixels = (b64) => countPixels(b64, (r, g, b) => r > 180 && g < 90 && b < 90);
+  const whitePixels = (b64) => countPixels(b64, (r, g, b) => r > 220 && g > 220 && b > 220);
+  if (findChrome()) {
+    await call('frame_start', { name: 'text', aspect: '9:16' });
+    r = await call('frame_edit', { ops: [{ op: 'add_text', text: 'HHHH', start: 0, duration: 2, style: { size: 0.2, weight: 900, color: '#ffffff', y: 0.5 } }] });
+    const tid = r.text.match(/\[(c_\w+)\]/)?.[1];
+    r = await call('frame_view', { t: 0.5 });
+    const img1 = r.content.find((c) => c.type === 'image')?.data;
+    ok('captions are drawn with no window open', !!img1 && !/NOT in these frames/.test(r.text) && whitePixels(img1) > 2000 && redPixels(img1) < 50, img1 ? `white pixels ${whitePixels(img1)}` : r.text.match(/⚠.*/)?.[0]);
+    r = await call('frame_edit', { ops: [{ op: 'update_clip', id: tid, style: { color: '#ff0000' } }] });
+    ok('restyle reports the stored change', /color #ffffff → #ff0000/.test(r.text), r.text.split('\n')[0]);
+    r = await call('frame_view', { t: 0.5 });
+    const img2 = r.content.find((c) => c.type === 'image')?.data;
+    ok('a restyled caption shows its new colour without a window', !!img2 && redPixels(img2) > 2000, `red pixels ${img2 ? redPixels(img2) : 'no image'}`);
+  } else console.log('- skipped headless text checks: no Chrome/Chromium found');
+  const { buildGraph } = await import('../src/render.js');
+  const proj = { width: 100, height: 100, fps: 30, assets: {}, clips: [{ id: 't1', kind: 'text', track: 'T1', start: 0, in: 0, out: 1, speed: 1, text: { content: 'new', size: 0.1, color: '#fff' } }] };
+  const g = buildGraph(proj, { rasters: { t1: { file: '/x.png', x: 0, y: 0, hash: JSON.stringify([{ content: 'old', size: 0.1, color: '#fff' }, 100, 100]) } }, assetPath: () => '' });
+  ok('a caption drawn from older text is never composited', g.inputs.length === 0 && /changed since it was drawn/.test(g.warnings.join(' ')));
+
+  // ── Honest edits
+  await call('frame_start', { name: 'honest', aspect: '16:9' });
+  await call('frame_import', { paths: [clip, noisy] });
+  r = await call('frame_edit', { ops: [{ op: 'add_clip', asset: 'a1', in: 0, out: 2 }, { op: 'add_clip', asset: 'a1', in: 3, out: 4 }] });
+  const [c1] = [...r.text.matchAll(/\[(c_\w+)\]/g)].map((m) => m[1]);
+  r = await call('frame_edit', { ops: [{ op: 'update_clip', id: c1, asset: 'a2', in: 1, out: 3 }] });
+  ok('update_clip rejects keys it does not apply', /✗ update_clip: update_clip does not change "asset"/.test(r.text) && /replace_source/.test(r.text) && new RegExp(`${c1} · 0–2s · a1 src 0–2`).test(r.text));
+  r = await call('frame_edit', { ops: [{ op: 'replace_source', id: c1, asset: 'a2', in: 1 }] });
+  ok('replace_source swaps footage and keeps the slot', /source a1 .* → a2 00:01\.00–00:03\.00/.test(r.text) && new RegExp(`${c1} · 0–2s · a2 src 1–3`).test(r.text), r.text.split('\n')[0]);
+  r = await call('frame_edit', { ops: [{ op: 'replace_source', id: c1, asset: 'a1', in: 5 }] });
+  ok('replace_source refuses a range past the end of the footage', /✗ replace_source: .* Nothing was changed/.test(r.text));
+  r = await call('frame_edit', { ops: [{ op: 'set_project', magnetic: false }, { op: 'add_clip', asset: 'a1', in: 0, out: 1, start: 4 }] });
+  ok('gaps on V1 are reported after an edit', /⚠ V1: [\d.]+s gap/.test(r.text), r.text.match(/⚠.*/)?.[0] || 'no warning');
 } finally {
   daemon.kill(); fs.rmSync(tmp, { recursive: true, force: true });
 }

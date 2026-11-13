@@ -14,6 +14,7 @@ AI client ──MCP over stdio──▶ bin/frame.js mcp      (src/mcp.js: thin 
                            └─ Server-Sent Events ──▶ the window (ui/index.html, app.js, style.css)
                                                           │ POST /api/ui  (the human's edits and messages)
                                                           └ POST /api/raster (text drawn by the window)
+                           └─ headless Chrome    src/text.js    (draws text when no window has: same ui/text-draw.js)
 ```
 
 The MCP process is disposable. The client starts one per session; it checks whether the service is running, starts it detached if not, and forwards each `tools/call` as an HTTP request. All state lives in the service, so several sessions, the shell (`frame call`) and the window all see the same project.
@@ -28,8 +29,10 @@ The MCP process is disposable. The client starts one per session; it checks whet
 | `src/daemon.js` | ~475 | HTTP server, project storage, tool handlers, UI actions, the user inbox, undo history |
 | `src/project.js` | ~290 | The data model and `applyOp`: every operation that can change a timeline |
 | `src/media.js` | ~150 | Probe, thumbnails, audio envelope, silences, loudness, scene cuts, Whisper, word re-alignment |
-| `src/render.js` | ~140 | Builds the ffmpeg filter graph for a full render or a single still |
-| `ui/app.js` | ~490 | State stream, bin, feed, timeline, inspector, drag editing, real-time preview, text rasteriser |
+| `src/render.js` | ~150 | Builds the ffmpeg filter graph for a full render or a single still. Skips any caption drawn from older text |
+| `src/text.js` | ~90 | Finds a Chromium browser and runs `ui/text-draw.js` in it headless to draw captions with no window open |
+| `ui/text-draw.js` | ~50 | The only code that draws caption pixels. Used by the window and by `src/text.js` |
+| `ui/app.js` | ~480 | State stream, bin, feed, timeline, inspector, drag editing, real-time preview, uploads captions it draws |
 | `scripts/record.mjs` | ~70 | Records the window through headless Chrome, optionally driving it with a scripted mouse |
 | `test/smoke.js` | ~50 | End-to-end checks |
 
@@ -47,7 +50,7 @@ project {
   steps   [ { id, title, tool, code, status, note, outputs[] } ]      // work done outside Frame
   renders [ { id, status, progress, file, duration, width, height, loudness } ]
   inbox   [ { kind, text } ]                // what the human did since the AI last looked
-  rasters { clipId: { file, x, y, hash } }  // text clips drawn by the window
+  rasters { clipId: { file, x, y, hash, by } }  // drawn captions; hash = the text+style they were drawn from, by = window | service
   paused, status, plan
 }
 
@@ -83,7 +86,7 @@ The window posts to `/api/ui`: `message`, `pause`, `resume`, `ops` (manual edits
 
 - A black `color` source of the project size and length is the base.
 - Each visual clip is its own ffmpeg input, seeked with `-ss in -t length`. Its chain is: retime, scale to the computed cover/contain size, optional grade, optional `chromakey`, optional opacity and alpha fades, then a `setpts` shift to its timeline start and an `overlay` enabled only during its span.
-- Text clips are PNGs the window drew and uploaded. They are overlaid at the recorded position. This is why preview and render match, and why text needs a window open.
+- Text clips are PNGs drawn by `ui/text-draw.js`: by the window when it is open, otherwise by headless Chrome running the same file (`src/text.js`). Each PNG records the text and style it was drawn from; a caption whose text or style has changed since is never overlaid. `frame_view` and `frame_render` redraw stale captions first, and `frame_render` refuses to export with any caption missing unless `allow_missing_text` is passed.
 - Each audio source is resampled, retimed, levelled, faded, delayed to its start and mixed with `amix`. The mix is padded to length and, unless disabled, normalised to −14 LUFS.
 
 `frame_view` uses the same builder with a one-frame window, so the still an AI inspects is produced by the export path, not by the browser.

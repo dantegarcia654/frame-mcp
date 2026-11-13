@@ -8,9 +8,11 @@ import { fileURLToPath } from 'node:url';
 import { VERSION, PORT, HOME, BASE, sleep, uid, round, mkdirp, run, tc } from './util.js';
 import * as media from './media.js';
 import * as packs from './packs.js';
-import { newProject, applyOp, describe, projectDuration, timelineWords, end } from './project.js';
+import { newProject, applyOp, describe, projectDuration, timelineWords, end, timelineIssues } from './project.js';
 import { buildGraph, ffmpegArgs, runFfmpeg } from './render.js';
 import { TOOLS, INSTRUCTIONS } from './tools.js';
+import { drawTextsHeadless } from './text.js';
+import { textKey } from '../ui/text-draw.js';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui');
 const PACE = Number(process.env.FRAME_PACE ?? 140);
@@ -171,14 +173,43 @@ async function renderStill(p, t, maxDim = 720) {
   return { file: out, warnings: g.warnings };
 }
 
-/** Wait until the UI has drawn every text clip (it rasterises text so render == preview). */
-async function waitRasters(p, ms = 4000) {
-  const missing = () => p.clips.filter((c) => c.kind === 'text' && p.rasters[c.id]?.hash !== textHash(p, c));
-  const t0 = Date.now();
-  while (missing().length && clients.size && Date.now() - t0 < ms) await sleep(120);
-  return missing();
+export const textHash = (p, c) => textKey(c, p.width, p.height);
+const staleTexts = (p) => p.clips.filter((c) => c.kind === 'text' && p.rasters[c.id]?.hash !== textHash(p, c));
+
+/** Keep a drawn caption. hash is the key of the text it was drawn from, so a later restyle can never reuse it. */
+function storeRaster(p, c, png, x, y, hash, by) {
+  const file = cacheFile(p, `text_${c.id}_${uid()}.png`);
+  fs.writeFileSync(file, png);
+  const old = p.rasters[c.id]?.file; if (old) fs.rm(old, { force: true }, () => {});
+  p.rasters[c.id] = { file, x, y, hash, by };
+  for (const k of Object.keys(p.rasters)) if (!p.clips.some((x) => x.id === k)) { fs.rm(p.rasters[k].file, { force: true }, () => {}); delete p.rasters[k]; }
 }
-export const textHash = (p, c) => JSON.stringify([c.text, p.width, p.height]);
+
+/** Give the window a moment to draw changed captions (it does so on every update). */
+async function waitRasters(p, ms = 4000) {
+  const t0 = Date.now();
+  while (staleTexts(p).length && clients.size && Date.now() - t0 < ms) await sleep(120);
+  return staleTexts(p);
+}
+
+/**
+ * Make sure every caption is drawn from its current text and style before anything is composited.
+ * The window draws captions when it is open; whatever is still missing or stale is drawn by headless Chrome
+ * running the same ui/text-draw.js. Returns { missing, reason } — missing captions are never composited stale.
+ */
+async function ensureRasters(p, waitMs = 1500) {
+  if (!staleTexts(p).length) return { missing: [] };
+  await waitRasters(p, waitMs);
+  const todo = staleTexts(p); if (!todo.length) return { missing: [] };
+  try {
+    const jobs = todo.map((c) => ({ id: c.id, clip: JSON.parse(JSON.stringify(c)), W: p.width, H: p.height, hash: textHash(p, c) }));
+    const out = await drawTextsHeadless(jobs);
+    for (const j of jobs) { const c = p.clips.find((x) => x.id === j.id); const r = out[j.id]; if (c && r) storeRaster(p, c, r.png, r.x, r.y, j.hash, 'service'); }
+    save(p);
+  } catch (e) { return { missing: staleTexts(p), reason: e.message }; }
+  const missing = staleTexts(p);
+  return { missing, reason: missing.length ? 'the text changed while it was being drawn; try again' : undefined };
+}
 
 // ───────────────────────── tools
 const handlers = {
@@ -257,7 +288,8 @@ const handlers = {
       } catch (e) { results.push(`${i + 1}. ✗ ${op.op}: ${e.message}`); }
     }
     if (clients.size) await waitRasters(p, 1500);
-    return [text(`${results.join('\n')}\n\n${describe(p)}`)];
+    const issues = timelineIssues(p);
+    return [text(`${results.join('\n')}${issues.length ? '\n\n' + issues.map((x) => '⚠ ' + x).join('\n') : ''}\n\n${describe(p)}`)];
   },
 
   async frame_cut_silence(a) {
@@ -343,7 +375,7 @@ const handlers = {
       emit(p); return content;
     }
     const times = (a.times || [a.t ?? 0]).slice(0, 6);
-    const missing = await waitRasters(p);
+    const { missing, reason } = await ensureRasters(p);
     for (const t of times) {
       const r = await renderStill(p, Number(t));
       const name = path.basename(r.file);
@@ -351,7 +383,7 @@ const handlers = {
       feed(p, { kind: 'look', text: `Checked the composited frame at ${tc(Number(t))}`, why: a.why, img: `/cache/${p.id}/${name}`, t: Number(t) });
       emit(p, { focus: { t: Number(t), agent: 'Claude' } });
     }
-    if (missing.length) content.push(text(`Note: ${missing.length} text clip(s) were not drawn because no Frame window is open to rasterise them.`));
+    if (missing.length) content.push(text(`⚠ ${missing.length} text clip(s) are NOT in these frames (${missing.map((c) => `"${c.text.content.slice(0, 20)}"`).join(', ')}): ${reason}.`));
     return content;
   },
 
@@ -385,7 +417,8 @@ const handlers = {
     const p = current(a.project_id);
     if (p.paused) return [text('Not rendered.')];
     const D = projectDuration(p); if (!D) throw new Error('The timeline is empty — nothing to render.');
-    const missing = await waitRasters(p, 6000);
+    const { missing, reason } = await ensureRasters(p, 3000);
+    if (missing.length && !a.allow_missing_text) throw new Error(`Not rendered: ${missing.length} text clip(s) could not be drawn from their current text and style (${missing.map((c) => `"${c.text.content.slice(0, 20)}"`).join(', ')}): ${reason}. Fix that and render again, or pass allow_missing_text: true to render without them.`);
     const quality = a.quality === 'draft' ? 'draft' : 'final';
     const n = p.renders.length + 1;
     const safe = p.name.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'frame';
@@ -404,7 +437,7 @@ const handlers = {
       p.status = { state: 'done', label: 'Render complete' };
       feed(p, { kind: 'render', text: `Render complete · ${info.width}×${info.height} · ${info.duration}s · ${(r.bytes / 1e6).toFixed(1)} MB${loud ? ` · ${loud.lufs} LUFS` : ''} · took ${round((r.endedAt - r.startedAt) / 1000, 1)}s`, renderId: r.id, done: true });
       emit(p, { rendered: r.id });
-      return [text(`Rendered: ${file}\nMeasured: ${info.width}×${info.height}, ${info.duration}s, ${(r.bytes / 1e6).toFixed(1)} MB${loud ? `, ${loud.lufs} LUFS integrated, true peak ${loud.true_peak_db} dBFS` : ''}.${[...g.warnings, ...(missing.length ? [`${missing.length} text clip(s) missing from this render (no Frame window open to draw them).`] : [])].map((w) => '\n⚠ ' + w).join('')}\nThe user can play it in the Frame window. Use frame_view to check frames yourself.`)];
+      return [text(`Rendered: ${file}\nMeasured: ${info.width}×${info.height}, ${info.duration}s, ${(r.bytes / 1e6).toFixed(1)} MB${loud ? `, ${loud.lufs} LUFS integrated, true peak ${loud.true_peak_db} dBFS` : ''}.${[...g.warnings, ...(missing.length ? [`${missing.length} text clip(s) left out of this render on request (allow_missing_text): ${reason}`] : [])].map((w) => '\n⚠ ' + w).join('')}\nThe user can play it in the Frame window. Use frame_view to check frames yourself.`)];
     } catch (e) {
       Object.assign(r, { status: 'failed', error: e.message }); p.status = { state: 'idle', label: 'Render failed' };
       feed(p, { kind: 'render', text: 'Render failed: ' + e.message.slice(-300), renderId: r.id }); emit(p);
@@ -499,7 +532,7 @@ export function startDaemon() {
       const url = new URL(req.url, BASE); const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
       if (req.method === 'GET') {
         if (url.pathname === '/') return sendFile(req, res, path.join(UI_DIR, 'index.html'));
-        if (['app.js', 'style.css', 'favicon.svg'].includes(parts[0]) && parts.length === 1) return sendFile(req, res, path.join(UI_DIR, parts[0]));
+        if (['app.js', 'text-draw.js', 'style.css', 'favicon.svg'].includes(parts[0]) && parts.length === 1) return sendFile(req, res, path.join(UI_DIR, parts[0]));
         if (url.pathname === '/api/ping') return json(res, { name: 'frame', version: VERSION, pid: process.pid, clients: clients.size });
         if (url.pathname === '/api/packs') return json(res, { packs: packs.listPacks() });
         if (parts[0] === 'pack' && parts.length === 3) { const pk = packs.getPack(parts[1]); const f = pk && pk.items.find((i) => i.file === parts[2]); return f ? sendFile(req, res, path.join(HOME, 'packs', pk.id, f.file), 'private, max-age=3600') : res.writeHead(404).end(); }
@@ -525,11 +558,7 @@ export function startDaemon() {
         if (url.pathname === '/api/raster') {
           const p = load(url.searchParams.get('project')); const id = url.searchParams.get('clip');
           const c = p?.clips.find((x) => x.id === id); if (!c) return json(res, { error: 'no clip' }, 404);
-          const file = cacheFile(p, `text_${id}_${uid()}.png`);
-          fs.writeFileSync(file, await body(req));
-          const old = p.rasters[id]?.file; if (old) fs.rm(old, { force: true }, () => {});
-          p.rasters[id] = { file, x: Number(url.searchParams.get('x')), y: Number(url.searchParams.get('y')), hash: textHash(p, c) };
-          for (const k of Object.keys(p.rasters)) if (!p.clips.some((x) => x.id === k)) { fs.rm(p.rasters[k].file, { force: true }, () => {}); delete p.rasters[k]; }
+          storeRaster(p, c, await body(req), Number(url.searchParams.get('x')), Number(url.searchParams.get('y')), textHash(p, c), 'window');
           save(p); return json(res, { ok: true });
         }
         if (url.pathname === '/api/shutdown') { json(res, { ok: true }); setTimeout(() => process.exit(0), 100); return; }

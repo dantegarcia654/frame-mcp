@@ -90,7 +90,7 @@ Projects live in `~/.frame`. Renders go to `~/Movies/Frame` unless Claude is tol
 
 - Effects are the ones listed above. No keyframed animation, no motion tracking, no transitions beyond fades, no generative effects built in. Claude can still do those elsewhere and bring the result in through `frame_step`.
 - The live preview approximates chroma key and plays volume above 100% at 100%; rendered frames and the export are exact.
-- Text needs the Frame window open at render time, because the window draws it.
+- Text is drawn by the Frame window, or, when no window is open, by a headless Chromium-based browser (Chrome, Chromium, Edge or Brave; set `FRAME_CHROME` to choose one). Without either, a render with text refuses rather than export missing captions.
 - Your message reaches Claude at its next tool call, not mid-thought. Pause stops further edits; it cannot interrupt a render already running.
 - One project is on screen at a time.
 - Tested on macOS. Linux should work; Windows is untested.

@@ -39,6 +39,9 @@ function checkKindTrack(kind, t) {
 const CLIP_PROPS = ['start', 'in', 'out', 'track', 'speed', 'volume', 'muted', 'fit', 'scale', 'x', 'y', 'opacity', 'fadeIn', 'fadeOut', 'label'];
 const TEXT_DEFAULT = { content: '', size: 0.055, color: '#ffffff', stroke: '#000000', strokeWidth: 0.14, bg: null, weight: 800, x: 0.5, y: 0.72, maxWidth: 0.84, uppercase: false, font: 'Helvetica Neue, Helvetica, Arial, sans-serif' };
 const TEXT_KEYS = Object.keys(TEXT_DEFAULT);
+// Everything update_clip can change. Anything else is rejected instead of silently ignored, so a "✓" always means it happened.
+const UPDATE_KEYS = [...CLIP_PROPS, 'duration', 'grade', 'key', 'text', 'style'];
+const OP_META = ['op', 'id', 'why', 'agent', 'ripple'];
 
 function setProps(p, c, a) {
   for (const k of CLIP_PROPS) if (a[k] !== undefined && a[k] !== null) c[k] = a[k];
@@ -190,6 +193,11 @@ export function applyOp(p, a, ctx = {}) {
     }
     case 'update_clip': {
       const c = getClip(p, a.id);
+      const unknown = Object.keys(a).filter((k) => !UPDATE_KEYS.includes(k) && !OP_META.includes(k));
+      if (unknown.length) throw new Error(`update_clip does not change ${unknown.map((k) => `"${k}"`).join(', ')}${unknown.includes('asset') ? ' — to put different footage in this slot use replace_source {id, asset, in}' : ''}. It changes: ${UPDATE_KEYS.join(', ')}. Nothing was changed.`);
+      if ((a.text != null || a.style) && c.kind !== 'text') throw new Error(`${label(p, c)} is a ${c.kind} clip; text and style only apply to text clips. Nothing was changed.`);
+      if (a.style) { const bad = Object.keys(a.style).filter((k) => !TEXT_KEYS.includes(k) || k === 'content'); if (bad.length) throw new Error(`Unknown text style ${bad.map((k) => `"${k}"`).join(', ')}. Text style keys: ${TEXT_KEYS.filter((k) => k !== 'content').join(', ')}. Nothing was changed.`); }
+      if (a.duration != null && !['text', 'image'].includes(c.kind)) throw new Error(`duration applies to text and image clips; for ${c.kind} change in/out or use trim_clip. Nothing was changed.`);
       const before = { start: c.start, in: c.in, out: c.out, track: c.track, dur: dur(c) };
       const backup = JSON.stringify(c);
       try { if (a.track && a.track !== c.track) { ensureTrack(p, a.track); checkKindTrack(c.kind, a.track); } setProps(p, c, a); }
@@ -209,12 +217,34 @@ export function applyOp(p, a, ctx = {}) {
       if (c.start !== before.start) parts.push(`start ${tc(before.start)} → ${tc(c.start)}`);
       if (c.in !== before.in) parts.push(`in ${tc(before.in)} → ${tc(c.in)}`);
       if (c.out !== before.out) parts.push(`out ${tc(before.out)} → ${tc(c.out)}`);
-      for (const k of ['speed', 'volume', 'muted', 'fit', 'scale', 'x', 'y', 'opacity', 'fadeIn', 'fadeOut']) if (a[k] !== undefined) parts.push(`${k} ${a[k]}`);
-      if (a.grade !== undefined) parts.push(a.grade ? `grade ${Object.entries(c.grade).map(([k, v]) => `${k} ${v}`).join(', ')}` : 'grade removed');
-      if (a.key !== undefined) parts.push(a.key ? `keyed out ${c.key.color} (similarity ${c.key.similarity}, blend ${c.key.blend})` : 'key removed');
-      if (a.text != null) parts.push(`text "${String(a.text).slice(0, 30)}"`);
-      if (a.style) parts.push(`style ${Object.keys(a.style).join(', ')}`);
+      // Read back what is now stored and report the differences — never echo the request.
+      const was = JSON.parse(backup), show = (v) => (v === undefined || v === null ? 'none' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+      for (const k of ['speed', 'volume', 'muted', 'fit', 'scale', 'x', 'y', 'opacity', 'fadeIn', 'fadeOut', 'label']) if (show(was[k]) !== show(c[k])) parts.push(`${k} ${show(was[k])} → ${show(c[k])}`);
+      if (show(was.grade) !== show(c.grade)) parts.push(c.grade ? `grade ${Object.entries(c.grade).map(([k, v]) => `${k} ${v}`).join(', ')}` : 'grade removed');
+      if (show(was.key) !== show(c.key)) parts.push(c.key ? `keyed out ${c.key.color} (similarity ${c.key.similarity}, blend ${c.key.blend})` : 'key removed');
+      if (c.kind === 'text') {
+        if (was.text.content !== c.text.content) parts.push(`text "${was.text.content.slice(0, 24)}" → "${c.text.content.slice(0, 24)}"`);
+        for (const k of TEXT_KEYS) if (k !== 'content' && show(was.text[k]) !== show(c.text[k])) parts.push(`${k} ${show(was.text[k])} → ${show(c.text[k])}`);
+      }
       return { text: `${label(p, c)} · ${parts.join(' · ') || 'no change'}`, clipIds: [c.id], t: c.start };
+    }
+    case 'replace_source': {
+      // Put different footage in a clip's slot: start, duration, track and effects stay; only the source changes.
+      const c = getClip(p, a.id);
+      if (c.kind === 'text') throw new Error('replace_source works on footage clips, not text.');
+      const asset = p.assets[a.asset]; if (!asset) throw new Error(`No asset "${a.asset}". Assets: ${Object.keys(p.assets).join(', ') || 'none'}`);
+      const kindOk = c.kind === 'audio' ? asset.kind === 'audio' || asset.hasAudio : ['video', 'image'].includes(asset.kind);
+      if (!kindOk) throw new Error(`${asset.name} is ${asset.kind}; a ${c.kind} clip needs ${c.kind === 'audio' ? 'audio' : 'video or an image'}. Nothing was changed.`);
+      const was = { asset: c.asset, in: c.in, out: c.out, kind: c.kind }, d = dur(c), sp = c.speed || 1;
+      const newKind = c.kind === 'audio' ? 'audio' : asset.kind;
+      let srcIn = newKind === 'image' ? 0 : Number(a.in ?? 0), srcOut = newKind === 'image' ? d : (a.out != null ? Number(a.out) : srcIn + d * sp);
+      if (!Number.isFinite(srcIn) || !Number.isFinite(srcOut)) throw new Error('in and out must be numbers.');
+      if (a.out != null && newKind !== 'image' && Math.abs((srcOut - srcIn) / sp - d) > 1 / p.fps) throw new Error(`in ${srcIn}–out ${srcOut} is ${round((srcOut - srcIn) / sp, 3)}s at speed ${sp}, but the slot is ${round(d, 3)}s. replace_source keeps the slot length; give only in, or change the length with trim_clip/update_clip. Nothing was changed.`);
+      if (newKind !== 'image' && (srcIn < 0 || srcOut > asset.duration + EPS)) throw new Error(`${asset.name} is ${asset.duration}s; the slot needs ${round(d * sp, 3)}s of source from ${srcIn}s, ending at ${round(srcOut, 3)}s. Pick in ≤ ${round(Math.max(0, asset.duration - d * sp), 3)}. Nothing was changed.`);
+      c.asset = asset.id; c.kind = newKind; c.in = round(srcIn); c.out = round(srcOut);
+      if (newKind === 'image') { c.speed = 1; }
+      if (a.label !== undefined) c.label = a.label;
+      return { text: `${label(p, c)} · source ${was.asset} ${tc(was.in)}–${tc(was.out)} → ${c.asset} ${tc(c.in)}–${tc(c.out)} · start ${tc(c.start)} and length ${round(d, 3)}s unchanged`, clipIds: [c.id], t: c.start };
     }
     case 'trim_clip': case 'extend_clip': {
       const c = getClip(p, a.id); if (c.kind === 'text') throw new Error(`${op} works on footage clips; use update_clip with duration for text.`);
@@ -316,8 +346,23 @@ export function applyOp(p, a, ctx = {}) {
       return { text: `Project: ${p.name} · ${p.width}×${p.height} · ${p.fps} fps`, clipIds: [], t: null };
     }
     default:
-      throw new Error(`Unknown op "${op}". Ops: add_clip, keep_ranges, trim_clip, extend_clip, add_text, add_captions, style_text, update_clip, split_clip, delete_clip, cut_range, remove_silences, close_gaps, clear_track, add_marker, delete_marker, set_project.`);
+      throw new Error(`Unknown op "${op}". Ops: add_clip, keep_ranges, replace_source, trim_clip, extend_clip, add_text, add_captions, style_text, update_clip, split_clip, delete_clip, cut_range, remove_silences, close_gaps, clear_track, add_marker, delete_marker, set_project.`);
   }
+}
+
+/** Gaps and overlaps on the magnetic tracks, where clips should butt end to end. Reported after every edit batch. */
+export function timelineIssues(p) {
+  const out = [], tol = 0.005;
+  for (const t of p.magneticTracks || ['V1']) {
+    const cs = trackClips(p, t); if (!cs.length) continue;
+    if (cs[0].start > tol) out.push(`${t}: ${round(cs[0].start, 3)}s of black before the first clip`);
+    for (let i = 1; i < cs.length; i++) {
+      const g = round(cs[i].start - end(cs[i - 1]), 3);
+      if (g > tol) out.push(`${t}: ${g}s gap at ${tc(end(cs[i - 1]))} between ${label(p, cs[i - 1])} and ${label(p, cs[i])}`);
+      else if (g < -tol) out.push(`${t}: ${-g}s overlap at ${tc(cs[i].start)} between ${label(p, cs[i - 1])} and ${label(p, cs[i])}`);
+    }
+  }
+  return out;
 }
 
 /** Compact timeline description for Claude. */

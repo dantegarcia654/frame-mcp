@@ -23,7 +23,7 @@ Version 1.0.0, 12 November 2026. Built and tested on one Mac (macOS, Node 24, ff
 
 1. **Steering is not instant.** A message reaches the model at its next tool call. A model in a long think or a long external task will not see it until it comes back.
 2. **Pause cannot stop a render in progress** and cannot stop work the model does outside Frame.
-3. **Text needs the window.** No window, no text in the render (a warning is returned).
+3. ~~**Text needs the window.**~~ Fixed: headless Chrome draws captions with the same code when no window is open, and stale captions are never rendered. Needs a Chromium-based browser installed.
 4. **`frame_step` is self-reported.** Frame shows the code the model says it ran.
 5. **Preview is approximate for chroma key and for volume above 100%.**
 6. **No keyframes.** Scale, position, opacity and volume are constant per clip. A push-in or audio duck needs splitting clips.
@@ -46,7 +46,7 @@ Version 1.0.0, 12 November 2026. Built and tested on one Mac (macOS, Node 24, ff
 6. **Incremental UI updates** (send patches, reuse DOM nodes) and persisted undo.
 7. **Cross-platform pass**: Linux and Windows open/paths, Safari and Firefox preview.
 8. **A real test suite** from the list in `docs/TESTING.md`, run in CI.
-9. **Server-side text** as a fallback when no window is open (`drawtext` or a bundled rasteriser).
+9. ~~**Server-side text**~~ Done (headless Chrome running `ui/text-draw.js`; this ffmpeg has no `drawtext`). See `docs/PROPOSAL-SEEING.md` for what comes next: `frame_watch`, shot memory, `frame_check`.
 10. **Audio ducking and a music-bed helper**, since nearly every edit needs them.
 
 ## Ideas that fit the product

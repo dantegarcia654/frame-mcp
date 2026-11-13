@@ -69,7 +69,8 @@ Ops:
 • keep_ranges {asset, ranges:[{in,out,label?}], track?} — assemble selected source ranges back-to-back (the fastest way to build an A-roll cut).
 • trim_clip {id, edge?:"start"|"end", by} — shorten a clip by "by" seconds from that edge. Magnetic: everything after it closes up.
 • extend_clip {id, edge?:"start"|"end", by | all:true} — lengthen a clip using the REST OF THE SOURCE FOOTAGE beyond its current in/out (all:true = every second left). Magnetic: later clips slide out of the way. Each clip in the timeline listing shows how much footage is left before/after it. If none is left, nothing changes and it says so.
-• update_clip {id, + clip props} — trim (in/out), move (start/track), or change any property.
+• update_clip {id, + clip props} — trim (in/out), move (start/track), or change any property. Keys it does not change are rejected, not ignored.
+• replace_source {id, asset, in?} — put different footage in a clip's slot (e.g. cut to another camera angle): start, length, track and effects stay the same.
 • split_clip {id, at} — at = timeline seconds.
 • delete_clip {id | ids, ripple?} — ripple true closes the gap on all tracks, "track" only on its own track.
 • cut_range {from, to, tracks?, ripple?} — remove a span of the timeline (default: every track, gap closed).
@@ -162,6 +163,7 @@ Text style: size (fraction of frame height, default 0.055), color, stroke, strok
     description: 'Render the timeline to an MP4 with ffmpeg (H.264 + AAC). The user sees progress and can play the result in Frame. Returns the file path and measured duration, size and loudness. quality "draft" is half-resolution and fast; "final" is full resolution. Audio is normalised to −14 LUFS unless loudnorm is false.',
     inputSchema: { type: 'object', properties: {
       quality: { type: 'string', enum: ['draft', 'final'] }, loudnorm: { type: 'boolean' },
+      allow_missing_text: { type: 'boolean', description: 'Render even if some captions cannot be drawn from their current text and style. By default the render refuses rather than ship missing or stale text.' },
       output_dir: { type: 'string', description: 'Folder for the MP4. Default ~/Movies/Frame.' }, ...why, ...pid,
     } },
   },
