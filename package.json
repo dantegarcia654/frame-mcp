@@ -1,6 +1,6 @@
 {
   "name": "frame-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Frame — the live editing room for Claude. Every cut, grade, caption and render Claude makes shows up on a real timeline you can watch, steer and edit by hand.",
   "type": "module",
   "bin": { "frame": "bin/frame.js", "frame-mcp": "bin/frame.js" },

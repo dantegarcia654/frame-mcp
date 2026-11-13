@@ -27,7 +27,7 @@ Frame is an MCP server. It does not add a new AI or a new kind of video; it give
 ## Requirements
 
 - Node.js 18 or newer
-- ffmpeg and ffprobe on your PATH (macOS: `brew install ffmpeg`)
+- ffmpeg and ffprobe on your PATH (macOS: `brew install ffmpeg` · Windows: `winget install Gyan.FFmpeg`)
 - Optional, for transcripts and automatic captions: Whisper (`pip install -U openai-whisper`)
 
 No npm dependencies. No account. No API key. Everything runs on your machine and binds to `127.0.0.1` only.
@@ -38,6 +38,13 @@ No npm dependencies. No account. No API key. Everything runs on your machine and
 
 ```bash
 git clone https://github.com/dantegarcia654/frame-mcp.git && node frame-mcp/bin/frame.js install
+```
+
+On Windows PowerShell 5.1 (the one built into Windows), `&&` is not allowed, so run the two halves one after the other:
+
+```powershell
+git clone https://github.com/dantegarcia654/frame-mcp.git
+node frame-mcp/bin/frame.js install
 ```
 
 That registers Frame for your user. Open a new Claude Code session and say:
@@ -66,7 +73,7 @@ Claude ──MCP (stdio)──▶ frame mcp ──HTTP──▶ Frame service (1
 
 The service owns the project. Claude's tool calls and your mouse both go through the same operation engine, so there is exactly one timeline. The final MP4 and the still frames Claude checks are produced by one ffmpeg filter graph built from that timeline. Text is drawn by the window and handed to ffmpeg as images, so what you preview is what gets rendered.
 
-Projects live in `~/.frame`. Renders go to `~/Movies/Frame` unless Claude is told otherwise. Your source files are only ever read.
+Projects live in `~/.frame`. Renders go to `~/Movies/Frame` (`~/Videos/Frame` on Windows) unless Claude is told otherwise. Your source files are only ever read.
 
 ## Tools
 
@@ -91,7 +98,7 @@ Projects live in `~/.frame`. Renders go to `~/Movies/Frame` unless Claude is tol
 - Text needs the Frame window open at render time, because the window draws it.
 - Your message reaches Claude at its next tool call, not mid-thought. Pause stops further edits; it cannot interrupt a render already running.
 - One project is on screen at a time.
-- Tested on macOS. Linux should work; Windows is untested.
+- Tested on macOS and Windows 11 (Whisper transcripts not yet on Windows). Linux should work.
 
 ## Command line
 

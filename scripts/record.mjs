@@ -7,11 +7,14 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const out = path.resolve(process.argv[2] || 'frame-demo.mp4');
 const size = (process.argv.includes('--size') ? process.argv[process.argv.indexOf('--size') + 1] : '1600x900').split('x').map(Number);
 const url = `http://127.0.0.1:${process.env.FRAME_PORT || 4747}`;
-const chrome = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium'].find((p) => fs.existsSync(p));
+const windows = [process.env.PROGRAMFILES, process.env['PROGRAMFILES(X86)'], process.env.LOCALAPPDATA].filter(Boolean)
+  .flatMap((d) => [path.join(d, 'Google/Chrome/Application/chrome.exe'), path.join(d, 'Microsoft/Edge/Application/msedge.exe')]);
+const chrome = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', ...windows].find((p) => fs.existsSync(p));
 if (!chrome) { console.error('Chrome not found.'); process.exit(1); }
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'frame-rec-'));
 const port = 9333 + Math.floor(Math.random() * 500);
@@ -66,6 +69,6 @@ if (scriptArg) {
   await sleep(1500);
   // A visible pointer: headless Chrome draws none.
   await evaluate(`(() => { const c = document.createElement('div'); c.innerHTML = '<svg viewBox="0 0 12 16" width="18" height="24"><path d="M0 0v13l3.6-3.2L6 16l2.2-.9-2.4-6H11z" fill="#fff" stroke="#000"/></svg>'; c.style.cssText = 'position:fixed;left:0;top:0;z-index:999;pointer-events:none'; document.body.append(c); addEventListener('mousemove', (e) => { c.style.transform = 'translate(' + e.clientX + 'px,' + e.clientY + 'px)'; }, true); })()`);
-  try { await (await import(path.resolve(scriptArg))).default({ send, evaluate, mouse, sleep, mark: (name) => { marks[name] = Date.now() / 1000; } }); } catch (e) { console.error('script error:', e.message); }
+  try { await (await import(pathToFileURL(path.resolve(scriptArg)).href)).default({ send, evaluate, mouse, sleep, mark: (name) => { marks[name] = Date.now() / 1000; } }); } catch (e) { console.error('script error:', e.message); }
   await sleep(600); finish();
 }
