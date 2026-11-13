@@ -1,5 +1,5 @@
 // Frame UI. Shows the daemon's project state live, previews the timeline in real time, and lets the human edit the same timeline.
-import { drawText, rasterText, textKey } from './text-draw.js';
+import { drawText, rasterText, textKey, reflowLines } from './text-draw.js';
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -36,7 +36,7 @@ function onState(m) {
   if (!P) { $('#empty').hidden = false; return; }
   document.title = `${P.name} — Frame`;
   if (sel && !P.clips.some((c) => c.id === sel)) sel = null;
-  renderBin(); renderSteps(); renderFeed(); renderTimeline(); renderInspector(); renderStatus(); rasterizeTexts();
+  renderBin(); renderSteps(); renderFeed(); renderTimeline(); if (!textEditor) renderInspector(); renderStatus(); rasterizeTexts();
   if (m.focus) focus(m.focus);
   if (m.rendered) showRender(m.rendered);
   firstState = false;
@@ -157,7 +157,7 @@ composer.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventD
 
 // ───────────────────────── timeline
 const laneH = (t) => (t[0] === 'V' ? 50 : t[0] === 'T' ? 26 : 38);
-const view = (c) => (drag && drag.id === c.id ? { ...c, ...drag.cur } : c);
+const view = (c) => (drag && drag.id === c.id ? { ...c, ...drag.cur } : textDrag && textDrag.c.id === c.id ? textDrag.c : c); // a caption being dragged in the preview keeps its live position
 function fitPps() { const w = $('#scroll').clientWidth - 30; return clamp(w / Math.max(P?.duration || 0, 8), 4, 400); }
 function renderTimeline() {
   if (autoFit) pps = fitPps();
@@ -207,6 +207,7 @@ function clipEl(raw, h) {
   }
   d.append(el('div', 'h l'), el('div', 'h r'));
   d.onmousedown = (e) => startDrag(e, raw);
+  if (raw.kind === 'text') d.ondblclick = (e) => { e.stopPropagation(); select(raw.id); if (T < raw.start || T >= end(raw)) seek(raw.start + Math.min(0.2, dur(raw) / 2)); if (renderView) showRender(null); tick(); openTextEditor(raw.id); }; // draw now so the caption's box is known, and take the keyboard at once
   return d;
 }
 async function drawWave(cv, c, a) {
@@ -230,15 +231,22 @@ function select(id) { sel = id; document.querySelectorAll('.clip').forEach((d) =
 function startDrag(e, raw) {
   if (e.button !== 0) return;
   e.stopPropagation(); select(raw.id);
-  const mode = e.target.classList.contains('l') ? 'l' : e.target.classList.contains('r') ? 'r' : 'move';
+  // Option/Alt-drag on a footage clip = slip: the clip keeps its place and length, the recording scrolls inside it.
+  const slip = e.altKey && ['video', 'audio'].includes(raw.kind) && !e.target.classList.contains('l') && !e.target.classList.contains('r');
+  const mode = slip ? 'slip' : e.target.classList.contains('l') ? 'l' : e.target.classList.contains('r') ? 'r' : 'move';
   const x0 = e.clientX, a = P.assets[raw.asset]; let moved = false;
+  if (slip && (T < raw.start || T >= end(raw))) seek(raw.start + Math.min(0.5, dur(raw) / 2)); // park the playhead in the clip so the preview shows the slip
   const edges = [0, T, ...P.clips.filter((c) => c.id !== raw.id).flatMap((c) => [c.start, end(c)])];
   const snap = (t) => { for (const s of edges) if (Math.abs(s - t) * pps < 7) return s; return t; };
   const stretch = raw.kind === 'text' || raw.kind === 'image';
   const move = (ev) => {
     const dx = (ev.clientX - x0) / pps; if (Math.abs(ev.clientX - x0) > 2) moved = true; if (!moved) return;
     const cur = {};
-    if (mode === 'move') {
+    if (mode === 'slip') {
+      const len = raw.out - raw.in, d = clamp(dx * raw.speed, -raw.in, a.duration - raw.out); // drag right = a later moment of the recording
+      cur.in = raw.in + d; cur.out = raw.in + d + len;
+      $('#viewMode').textContent = `Slip · source ${tc(cur.in)}–${tc(cur.out)} (${d >= 0 ? '+' : ''}${d.toFixed(2)}s)`;
+    } else if (mode === 'move') {
       let s = snap(raw.start + dx); if (s === raw.start + dx) { const e2 = snap(raw.start + dx + dur(raw)); if (e2 !== raw.start + dx + dur(raw)) s = e2 - dur(raw); }
       cur.start = Math.max(0, s);
       const lane = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.lane');
@@ -257,6 +265,7 @@ function startDrag(e, raw) {
     removeEventListener('mousemove', move); removeEventListener('mouseup', up);
     if (!drag) return;
     const c = drag.cur, r3 = (n) => Math.round(n * 1000) / 1000;
+    if (mode === 'slip') { $('#viewMode').textContent = 'Live preview'; Object.assign(raw, c); post({ action: 'ops', ops: [{ op: 'slip_clip', id: raw.id, in: r3(c.in) }] }).finally(() => { drag = null; renderTimeline(); }); return; }
     const op = { op: 'update_clip', id: raw.id };
     if (c.start != null && c.start !== raw.start) op.start = r3(c.start);
     if (c.track && c.track !== raw.track) op.track = c.track;
@@ -297,6 +306,7 @@ const FIELDS = [
   num('Start', 'start'), num('Source in', 'in'), num('Source out', 'out'), num('Speed', 'speed', 0.05), num('Volume', 'volume', 0.05),
   num('Scale', 'scale', 0.01), num('X', 'x', 0.01), num('Y', 'y', 0.01), num('Opacity', 'opacity', 0.05), num('Fade in', 'fadeIn', 0.05), num('Fade out', 'fadeOut', 0.05),
 ];
+$('#inspector').addEventListener('focusout', () => setTimeout(() => { if (P && !$('#inspector').contains(document.activeElement)) renderInspector(); }, 0)); // catch up on changes skipped while typing
 function renderInspector() {
   const box = $('#inspector'); const ae = document.activeElement;
   if (ae && box.contains(ae) && ae.tagName !== 'BUTTON') return; // don't rebuild while typing
@@ -308,9 +318,9 @@ function renderInspector() {
       <div class="kv"><span>Canvas</span><span>${P.width}×${P.height}</span></div><div class="kv"><span>Frame rate</span><span>${P.fps}</span></div>
       <div class="kv"><span>Duration</span><span>${tc(P.duration)}</span></div><div class="kv"><span>Clips</span><span>${P.clips.length}</span></div>
       <div class="kv"><span>Timeline version</span><span>${P.version}</span></div>
-      ${r ? `<h3>Last render</h3><div class="kv"><span>Size</span><span>${r.width}×${r.height}</span></div><div class="kv"><span>Length</span><span>${tc(r.duration)}</span></div>${r.loudness ? `<div class="kv"><span>Loudness</span><span>${r.loudness.lufs} LUFS</span></div>` : ''}<div class="acts"><button id="playLast" class="solid">▶ Play</button><button id="revealLast">Show file</button></div>` : ''}
+      ${r ? `<h3>Last render</h3><div class="kv"><span>Size</span><span>${r.width}×${r.height}</span></div><div class="kv"><span>Length</span><span>${tc(r.duration)}</span></div>${r.loudness ? `<div class="kv"><span>Loudness</span><span>${r.loudness.lufs} LUFS</span></div>` : ''}<div class="acts"><button id="playLast" class="solid">▶ Play</button><button id="revealLast">Show file</button><button id="approveLast" title="Copy this render to ~/Movies/Frame/Approved (never overwrites)">Approve &amp; save</button></div>` : ''}
       <div class="sec" style="padding-top:16px;text-transform:none;letter-spacing:0;line-height:1.5">Select a clip to see and change exactly what Claude set on it.</div>`;
-    if (r) { $('#playLast').onclick = () => showRender(r.id); $('#revealLast').onclick = () => post({ action: 'reveal', id: r.id }); }
+    if (r) { $('#playLast').onclick = () => showRender(r.id); $('#revealLast').onclick = () => post({ action: 'reveal', id: r.id }); $('#approveLast').onclick = () => post({ action: 'approve', id: r.id }).then((x) => x.file && toast(`Saved: ${x.file}`)); }
     return;
   }
   const a = P.assets[c.asset];
@@ -319,7 +329,16 @@ function renderInspector() {
   const send = (props) => post({ action: 'ops', ops: [{ op: 'update_clip', id: c.id, ...props }] });
   const numIn = (v, step, on) => { const i = el('input'); i.type = 'number'; i.step = step; i.value = v ?? ''; i.onchange = () => { if (i.value !== '') on(Number(i.value)); i.blur(); }; return i; };
   if (c.kind === 'text') {
-    const ta = el('textarea'); ta.rows = 2; ta.value = c.text.content; ta.onchange = () => { send({ text: ta.value }); ta.blur(); }; const r = el('div', 'row'); r.append(ta); box.append(r);
+    box.append(el('div', 'sec', 'Text — Enter saves · ⇧Enter new line · Esc cancels · double-click the caption to edit in place'));
+    const ta = el('textarea'); ta.rows = 3; ta.value = c.text.content; ta.id = 'textField';
+    let cancelled = false; const commit = () => { if (!cancelled && ta.value !== c.text.content && ta.value.trim()) send({ text: ta.value }); cancelled = false; };
+    ta.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ta.blur(); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelled = true; ta.value = c.text.content; ta.blur(); } };
+    ta.onblur = commit; const r = el('div', 'row'); r.append(ta); box.append(r);
+    // Lines: reflow the words into exactly N balanced lines (Auto = one paragraph, wrapped by line width again).
+    box.append(el('div', 'sec', 'Lines'));
+    const lr = el('div', 'acts'); for (const n of ['Auto', 1, 2, 3, 4]) { const x = el('button', '', String(n)); x.dataset.lines = n; x.onclick = () => setLines(c, n); lr.append(x); } box.append(lr);
+    box.append(el('div', 'sec', 'Text size — or drag the round handle on the caption; the square handle sets line width'));
+    const sr = el('div', 'acts'); for (const [t2, k] of [['A−', 1 / 1.1], ['A+', 1.1]]) { const x = el('button', '', t2); x.onclick = () => send({ style: { size: Math.round(clamp(c.text.size * k, 0.012, 0.25) * 1000) / 1000 } }); sr.append(x); } box.append(sr);
     row('Start', numIn(c.start, 0.01, (v) => send({ start: v })));
     row('Duration', numIn(+dur(c).toFixed(3), 0.01, (v) => send({ duration: v })));
     box.append(el('div', 'sec', 'Style'));
@@ -337,12 +356,23 @@ function renderInspector() {
       if (c.key) { const col = el('input'); col.value = c.key.color; col.onchange = () => send({ key: { color: col.value } }); row('Colour', col); row('Similarity', numIn(c.key.similarity, 0.01, (v) => send({ key: { similarity: v } }))); row('Blend', numIn(c.key.blend, 0.01, (v) => send({ key: { blend: v } }))); }
     }
   }
+  if (c.kind === 'video' || c.kind === 'audio') {
+    // Slip: same place, same length, a different moment of the recording.
+    const fr = 1 / (P.fps || 30), r3 = (n) => Math.round(n * 1000) / 1000;
+    box.append(el('div', 'sec', 'Slip — keeps place and length · or ⌥-drag the clip'));
+    const sl = el('div', 'acts'); for (const [t2, d] of [['−1s', -1], ['−5f', -5 * fr], ['−1f', -fr], ['+1f', fr], ['+5f', 5 * fr], ['+1s', 1]]) { const x = el('button', '', t2); x.onclick = () => post({ action: 'ops', ops: [{ op: 'slip_clip', id: c.id, by: r3(d) }] }); sl.append(x); }
+    box.append(sl);
+  }
   const acts = el('div', 'acts');
   const b = (t, fn) => { const x = el('button', '', t); x.onclick = fn; acts.append(x); };
-  b('Split at playhead', splitSel); b('Delete', () => delSel(false)); b('Ripple delete', () => delSel(true));
+  b('Split at playhead', splitSel);
+  if (c.kind === 'video' || c.kind === 'audio') b('Save to Frame library', () => post({ action: 'save_clip', id: c.id }).then((x) => x.ok && toast(`Saved "${x.label}" to your Frame library${x.duplicate ? ' (already there)' : ''}`)));
+  b('Delete', () => delSel(false)); b('Ripple delete', () => delSel(true));
   if (c.kind !== 'audio' && c.kind !== 'text') b(c.muted ? 'Unmute' : 'Mute', () => send({ muted: !c.muted }));
   box.append(acts);
 }
+function addTextAtPlayhead() { if (!P) return; post({ action: 'ops', ops: [{ op: 'add_text', text: 'Your text', start: Math.round(T * 100) / 100, duration: 2, track: 'T2', style: { y: 0.3 } }] }); }
+$('#addText').onclick = addTextAtPlayhead;
 function splitSel() { const c = P.clips.find((x) => x.id === sel) || P.clips.find((x) => x.track === 'V1' && T > x.start && T < end(x)); if (c && T > c.start && T < end(c)) post({ action: 'ops', ops: [{ op: 'split_clip', id: c.id, at: Math.round(T * 1000) / 1000 }] }); }
 function delSel(ripple) { if (sel) post({ action: 'ops', ops: [{ op: 'delete_clip', id: sel, ripple }] }); }
 
@@ -356,6 +386,7 @@ addEventListener('keydown', (e) => {
   if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { if (e.key === 'Escape') document.activeElement.blur(); return; }
   if (e.key === ' ') { e.preventDefault(); togglePlay(); }
   else if (e.key === 's' || e.key === 'S') splitSel();
+  else if ((e.key === 't' || e.key === 'T') && !e.metaKey && !e.ctrlKey) { e.preventDefault(); addTextAtPlayhead(); }
   else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); delSel(e.shiftKey); }
   else if (e.key === 'ArrowLeft') seek(Math.max(0, T - (e.shiftKey ? 1 : 1 / (P?.fps || 30))));
   else if (e.key === 'ArrowRight') seek(T + (e.shiftKey ? 1 : 1 / (P?.fps || 30)));
@@ -424,18 +455,96 @@ function drawVisual(src, sw0, sh0, c, t) {
   } else { ctx.filter = filter; ctx.drawImage(src, x, y, w, h); }
   ctx.filter = 'none'; ctx.globalAlpha = 1;
 }
+// ───────────────────────── captions in the preview: drag to move, handles to size, double-click to type
+let textHits = [], textDrag = null, textEditor = null, selHit = null;
+const handleSize = () => Math.max(14, cv.width / 45);
+function drawSelection(hit, id) { // the selected caption's box and handles: round corner = text size, square side = line width
+  ctx.save(); const hs = handleSize();
+  ctx.lineWidth = Math.max(2, cv.width / 400); ctx.setLineDash([10, 8]); ctx.strokeStyle = '#000'; ctx.strokeRect(hit.x, hit.y, hit.w, hit.h);
+  ctx.lineDashOffset = 9; ctx.strokeStyle = '#fff'; ctx.strokeRect(hit.x, hit.y, hit.w, hit.h); ctx.setLineDash([]);
+  ctx.fillStyle = '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+  ctx.fillRect(hit.x + hit.w - hs / 2, hit.y + hit.h / 2 - hs / 2, hs, hs); ctx.strokeRect(hit.x + hit.w - hs / 2, hit.y + hit.h / 2 - hs / 2, hs, hs);
+  ctx.beginPath(); ctx.arc(hit.x + hit.w, hit.y + hit.h, hs * 0.7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.restore(); selHit = { id, ...hit };
+}
+function onHandle(px, py) {
+  if (!selHit || selHit.id !== sel) return null; const r = handleSize() * 1.3, x = selHit.x + selHit.w;
+  // On a one-line caption the two handles nearly touch, so the nearer one wins.
+  const dSize = Math.hypot(px - x, py - (selHit.y + selHit.h)), dWidth = Math.hypot(px - x, py - (selHit.y + selHit.h / 2));
+  if (Math.min(dSize, dWidth) > r) return null;
+  return dSize <= dWidth ? 'size' : 'width';
+}
+// Lines: n balanced lines measured with the caption's own font, at the project's real size.
+function setLines(c, n) {
+  const g = document.createElement('canvas').getContext('2d');
+  const f = reflowLines(c, n, P.width, (str, size) => { g.font = `${c.text.weight} ${size * P.height}px ${c.text.font}`; return g.measureText(str).width; });
+  post({ action: 'ops', ops: [{ op: 'update_clip', id: c.id, text: f.text, style: f.style }] });
+}
+// Type over a caption in place. Enter saves, Shift+Enter adds a line, Esc cancels.
+function openTextEditor(id) {
+  closeTextEditor(false);
+  const c = P?.clips.find((x) => x.id === id); if (!c || renderView) return;
+  const wrap = $('#viewerWrap'), wr = wrap.getBoundingClientRect(), cr = cv.getBoundingClientRect();
+  const h = textHits.find((x) => x.id === id), k = cr.width / cv.width;
+  const box = h || { x: cv.width * 0.05, y: c.text.y * cv.height - 60, w: cv.width * 0.9, h: 120 };
+  const ta = document.createElement('textarea'); ta.className = 'textEditor'; ta.value = c.text.content; ta.spellcheck = false;
+  Object.assign(ta.style, { left: `${cr.left - wr.left + Math.max(0, box.x) * k}px`, top: `${cr.top - wr.top + Math.max(0, box.y) * k}px`, width: `${Math.min(cv.width, box.w) * k}px`, minHeight: `${box.h * k}px`, fontSize: `${Math.max(12, c.text.size * cv.height * k * 0.8)}px` });
+  wrap.append(ta); textEditor = { id, ta, original: c.text.content };
+  ta.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); closeTextEditor(true); } else if (e.key === 'Escape') { e.preventDefault(); closeTextEditor(false); } };
+  ta.onblur = () => closeTextEditor(true);
+  ta.focus(); ta.select();
+}
+function closeTextEditor(save) {
+  if (!textEditor) return; const { id, ta, original } = textEditor; textEditor = null;
+  const v = ta.value; ta.remove();
+  if (save && v.trim() && v !== original) post({ action: 'ops', ops: [{ op: 'update_clip', id, text: v }] });
+  renderInspector();
+}
+(() => {
+  const pt = (e) => { const r = cv.getBoundingClientRect(); return { fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height }; };
+  const hitAt = (px, py) => [...textHits].reverse().find((r) => px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h);
+  cv.addEventListener('pointerdown', (e) => {
+    if (!P || renderView || playing || e.button !== 0) return; const { fx, fy } = pt(e), px = fx * cv.width, py = fy * cv.height;
+    const hm = onHandle(px, py);
+    if (hm) { const c = P.clips.find((x) => x.id === selHit.id); if (!c) return; const cx = c.text.x * cv.width, cy = c.text.y * cv.height;
+      textDrag = { c, mode: hm, size0: c.text.size, d0: Math.max(1, Math.hypot(px - cx, py - cy)), moved: false }; cv.setPointerCapture(e.pointerId); e.preventDefault(); return; }
+    const h = hitAt(px, py); if (!h) return;
+    const c = P.clips.find((x) => x.id === h.id); if (!c) return;
+    select(c.id); textDrag = { c, mode: 'move', dx: c.text.x - fx, dy: c.text.y - fy, moved: false }; cv.setPointerCapture(e.pointerId); cv.style.cursor = 'grabbing'; e.preventDefault();
+  });
+  cv.addEventListener('pointermove', (e) => {
+    const { fx, fy } = pt(e), px = fx * cv.width, py = fy * cv.height;
+    if (!textDrag) { const hm = !playing && onHandle(px, py); cv.style.cursor = hm === 'size' ? 'nwse-resize' : hm === 'width' ? 'ew-resize' : !playing && hitAt(px, py) ? 'grab' : ''; return; }
+    textDrag.moved = true; const t = textDrag.c.text;
+    if (textDrag.mode === 'size') t.size = clamp(textDrag.size0 * Math.hypot(px - t.x * cv.width, py - t.y * cv.height) / textDrag.d0, 0.012, 0.25);
+    else if (textDrag.mode === 'width') t.maxWidth = clamp((2 * Math.abs(px - t.x * cv.width)) / cv.width, 0.12, 1);
+    else { t.x = clamp(fx + textDrag.dx, 0, 1); t.y = clamp(fy + textDrag.dy, 0, 1); }
+  });
+  const done = () => {
+    if (!textDrag) return; const { c, moved, mode } = textDrag; textDrag = null; cv.style.cursor = ''; if (!moved) return;
+    const r3 = (n) => Math.round(n * 1000) / 1000;
+    const style = mode === 'size' ? { size: r3(c.text.size) } : mode === 'width' ? { maxWidth: r3(c.text.maxWidth) } : { x: r3(c.text.x), y: r3(c.text.y) };
+    post({ action: 'ops', ops: [{ op: 'update_clip', id: c.id, style }] });
+  };
+  cv.addEventListener('pointerup', done); cv.addEventListener('pointercancel', done);
+  cv.addEventListener('dblclick', (e) => {
+    if (!P || renderView) return; const { fx, fy } = pt(e), h = hitAt(fx * cv.width, fy * cv.height);
+    if (h) { e.preventDefault(); if (playing) togglePlay(); select(h.id); openTextEditor(h.id); }
+  });
+})();
 function tick() {
   if (!P || renderView) return;
   sizeViewer();
   if (playing) { T = playT0 + (performance.now() - playW0) / 1000; if (T >= P.duration) { T = P.duration; playing = false; $('#play').textContent = '▶'; } placePlayhead(); const sc = $('#scroll'), x = T * pps; if (x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - 60; }
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
+  textHits = []; selHit = null;
   for (const s of slots.values()) s.used = false;
   const order = (t) => (t[0] === 'A' ? -1 : t[0] === 'T' ? 1000 : 0) + Number(t.slice(1));
   for (const track of [...P.tracks].sort((a, b) => order(a) - order(b))) {
     const list = P.clips.filter((c) => c.track === track).map(view).sort((a, b) => a.start - b.start);
     list.forEach((c, i) => {
       const active = T >= c.start && T < end(c) - 0.0005, soon = !active && c.start > T && c.start - T < 1.5;
-      if (c.kind === 'text') { if (active) { ctx.globalAlpha = clamp((c.opacity ?? 1) * fadeK(c, T), 0, 1); drawText(ctx, c, cv.width, cv.height); ctx.globalAlpha = 1; } return; }
+      if (c.kind === 'text') { if (active) { ctx.globalAlpha = clamp((c.opacity ?? 1) * fadeK(c, T), 0, 1); const hit = drawText(ctx, c, cv.width, cv.height); ctx.globalAlpha = 1; textHits.push({ id: c.id, ...hit }); if (c.id === sel) drawSelection(hit, c.id); } return; }
       if (c.kind === 'image') { if (!active) return; let im = images.get(c.asset); if (!im) { im = new Image(); im.src = `/media/${P.id}/${c.asset}`; images.set(c.asset, im); } if (im.complete && im.naturalWidth) drawVisual(im, im.naturalWidth, im.naturalHeight, c, T); return; }
       if (!active && !soon) return;
       const m = mediaFor(c, i); syncMedia(m, c, T, active);
@@ -482,4 +591,4 @@ let lastRaf = 0;
 const loop = () => { lastRaf = performance.now(); tick(); requestAnimationFrame(loop); };
 setInterval(() => { if (performance.now() - lastRaf > 250) tick(); }, 60);
 connect(); requestAnimationFrame(loop);
-window.__frame = { slots, get P() { return P; }, get T() { return T; }, seek, togglePlay };
+window.__frame = { slots, get P() { return P; }, get T() { return T; }, get sel() { return sel; }, get selHit() { return selHit; }, get textHits() { return textHits; }, seek, togglePlay, select };

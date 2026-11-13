@@ -15,6 +15,7 @@
     <div id="status"><i></i><span>Waiting for Claude</span></div>
     <div class="grow"></div>
     <label class="chk" title="Move the playhead to whatever Claude just touched"><input type="checkbox" id="follow" checked> Follow Claude</label>
+    <button id="addText" title="Add a text clip at the playhead (T)">+ Text</button>
     <button id="undo" title="Undo (⌘Z)">Undo</button>
     <button id="redo" title="Redo (⇧⌘Z)">Redo</button>
     <button id="pause" class="solid" title="Stop Claude before its next step">Pause Claude</button>
@@ -70,7 +71,7 @@
       <span class="dim">Timeline</span>
       <span id="tlinfo" class="dim"></span>
       <div class="grow"></div>
-      <span class="dim keys">Space play · S split · ⌫ delete · ⇧⌫ ripple delete · drag to reorder · drag edges to trim or extend (magnetic: the rest follows)</span>
+      <span class="dim keys">Space play · S split · T text · ⌫ delete · ⇧⌫ ripple delete · drag to reorder · drag edges to trim or extend (magnetic: the rest follows) · ⌥-drag to slip · double-click a caption to edit</span>
       <button id="fit">Fit</button>
       <input type="range" id="zoom" min="0" max="100" value="0" title="Zoom">
     </div>

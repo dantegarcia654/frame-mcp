@@ -211,19 +211,82 @@ async function ensureRasters(p, waitMs = 1500) {
   return { missing, reason: missing.length ? 'the text changed while it was being drawn; try again' : undefined };
 }
 
+// ───────────────────────── style profiles
+// One shared folder of plain-text profiles, outside any single Frame install (FRAME_HOME), so every AI and every copy of
+// Frame reads the same rules.
+const PROFILE_DIR = process.env.FRAME_PROFILES || path.join(os.homedir(), '.frame', 'profiles');
+function loadProfile(name) {
+  const n = String(name || 'default').replace(/[^\w.-]+/g, '').replace(/^\.+/, '');
+  const f = path.join(PROFILE_DIR, `${n}.md`);
+  if (!n || !fs.existsSync(f)) return null;
+  const real = fs.realpathSync(f);
+  return { name: n, file: real, text: fs.readFileSync(real, 'utf8').trim() };
+}
+const profileBlock = (pr) => pr ? `\n\n━━ STYLE PROFILE "${pr.name}" (${pr.file}) — the user's rules and the mistakes already fixed. Follow it before showing any cut. ━━\n${pr.text}\n━━ end of profile ━━` : '';
+
+// ───────────────────────── outputs the user keeps
+// Approve & save: copy a finished render out of Frame's data folder to where the user keeps finished work. Never overwrites.
+const APPROVED_DIR = process.env.FRAME_APPROVED_DIR || path.join(os.homedir(), 'Movies', 'Frame', 'Approved');
+function approveRender(p, id) {
+  const r = (id && p.renders.find((x) => x.id === id)) || p.renders.filter((x) => x.status === 'done').at(-1);
+  if (!r?.file || r.status !== 'done' || !fs.existsSync(r.file)) return { error: 'Render the project first, then approve it.' };
+  mkdirp(APPROVED_DIR);
+  const base = p.name.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'frame';
+  for (let n = 1; n < 10000; n++) {
+    const dest = path.join(APPROVED_DIR, `${base}_v${n}${path.extname(r.file) || '.mp4'}`);
+    try { fs.copyFileSync(r.file, dest, fs.constants.COPYFILE_EXCL); } catch (e) { if (e.code === 'EEXIST') continue; return { error: `Could not save the approved copy: ${e.message}` }; }
+    feed(p, { actor: 'user', kind: 'op', op: 'approve', text: `Approved ${r.id}: saved a copy to ${dest}` }); emit(p);
+    if (process.platform === 'darwin' && !process.env.FRAME_NO_OPEN) spawn('open', ['-R', dest]);
+    return { ok: true, file: dest };
+  }
+  return { error: `Too many approved versions of "${base}" in ${APPROVED_DIR}.` };
+}
+
+// Save to Frame library: send a clip's source range to Frame Inbox (a separate local app) as reusable footage.
+// If Frame Inbox is not installed or not running, this says so and changes nothing.
+const INBOX_DIR = process.env.FRAME_INBOX_DIR || path.join(os.homedir(), 'Library', 'Application Support', 'FrameInbox');
+const INBOX_URL = process.env.FRAME_INBOX_URL || 'http://127.0.0.1:4875';
+async function saveClipToLibrary(p, id, wanted) {
+  const c = p.clips.find((x) => x.id === id), a = c && p.assets[c.asset];
+  if (!c || !a || !['video', 'audio'].includes(c.kind) || !a.path) return { error: 'Select a video or audio clip to save.' };
+  const tokenFile = path.join(INBOX_DIR, 'data', 'access-token');
+  if (!fs.existsSync(tokenFile)) return { error: `Frame Inbox is not installed (no ${tokenFile}). Nothing was saved.` };
+  const label = String(wanted || c.label || a.name || 'cut').replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_').slice(0, 60);
+  const out = path.join(os.tmpdir(), `frame-save-${uid('')}.mp4`);
+  feed(p, { actor: 'user', kind: 'op', op: 'save_clip', text: `Saving "${label}" (source ${tc(c.in)}–${tc(c.out)}) to your Frame library…`, clipIds: [c.id] }); emit(p);
+  try {
+    await run('ffmpeg', ['-v', 'error', '-y', '-ss', String(c.in), '-to', String(c.out), '-i', a.path, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac', out]);
+    const q = `name=${encodeURIComponent(`${label}_${c.id}.mp4`)}&role=${encodeURIComponent(`saved_cut:${label}`)}`;
+    let res;
+    try { res = await fetch(`${INBOX_URL}/api/upload?${q}`, { method: 'POST', headers: { 'x-frame-token': fs.readFileSync(tokenFile, 'utf8').trim(), 'Content-Type': 'application/octet-stream' }, body: fs.readFileSync(out), signal: AbortSignal.timeout(120000) }); }
+    catch (e) { throw new Error(`Frame Inbox is not running at ${INBOX_URL} (${e.cause?.code || e.message})`); }
+    let j; try { j = await res.json(); } catch { j = { error: `Frame Inbox answered HTTP ${res.status}` }; }
+    if (!res.ok || j.error) throw new Error(j.error || `Frame Inbox answered HTTP ${res.status}`);
+    feed(p, { actor: 'user', kind: 'op', op: 'save_clip', text: `Saved "${label}" to your Frame library${j.duplicate ? ' (it was already there)' : ''}.`, clipIds: [c.id] }); emit(p);
+    return { ok: true, label, duplicate: !!j.duplicate };
+  } catch (e) {
+    feed(p, { actor: 'user', kind: 'op', op: 'save_clip', text: `Could not save "${label}": ${e.message}. Nothing was saved.`, clipIds: [c.id] }); emit(p);
+    return { error: `Could not save: ${e.message}` };
+  } finally { fs.rmSync(out, { force: true }); }
+}
+
 // ───────────────────────── tools
 const handlers = {
   async frame_start(a) {
     if (a.action === 'list') { const l = listProjects(); return [text(l.length ? l.map((x) => `${x.id} · "${x.name}" · ${x.duration}s · ${x.clips} clips · ${new Date(x.updatedAt).toLocaleString()}`).join('\n') : 'No projects yet.')]; }
+    const wantProfile = a.profile || (a.project_id ? current(a.project_id).profile : null);
+    const prof = loadProfile(wantProfile);
+    if (a.profile && !prof) throw new Error(`No style profile "${a.profile}" in ${PROFILE_DIR}. frame_profile {action:"list"} names the saved ones.`);
     let p;
     if (a.project_id) { p = current(a.project_id); }
     else { p = newProject({ name: a.name || 'Untitled edit', aspect: a.aspect || '9:16', fps: a.fps || 30 }); p.inbox = []; p.rasters = {}; projects.set(p.id, p); }
     setCurrent(p.id);
+    if (prof && p.profile !== prof.name) { p.profile = prof.name; feed(p, { actor: 'frame', kind: 'system', text: `Style profile "${prof.name}" applies to this edit` }); }
     if (a.plan) { p.plan = a.plan; feed(p, { kind: 'plan', text: a.plan }); }
     else if (!a.project_id) feed(p, { kind: 'system', actor: 'frame', text: `Session opened · ${p.width}×${p.height} @ ${p.fps} fps` });
     emit(p);
     const shown = await ensureWindow();
-    return [text(`Frame is live at ${BASE} ${shown ? '(window is open and connected)' : '(could not confirm a window is open — tell the user to open that URL; if you have a browser/preview pane tool, open it there)'}.\n\n${describe(p)}\n\nThe user is watching. Narrate with frame_note, make every change through frame_edit, and check each tool result for user input.`)];
+    return [text(`Frame is live at ${BASE} ${shown ? '(window is open and connected)' : '(could not confirm a window is open — tell the user to open that URL; if you have a browser/preview pane tool, open it there)'}.\n\n${describe(p)}\n\nThe user is watching. Narrate with frame_note, make every change through frame_edit, and check each tool result for user input.${prof ? profileBlock(prof) : `\n\nNo style profile found (${PROFILE_DIR}/${String(wantProfile || 'default')}.md).`}`)];
   },
 
   async frame_import(a) {
@@ -387,9 +450,17 @@ const handlers = {
     return content;
   },
 
+  async frame_profile(a) {
+    if (a.action === 'list') { const l = fs.existsSync(PROFILE_DIR) ? fs.readdirSync(PROFILE_DIR).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3)) : []; return [text(l.length ? `Profiles in ${PROFILE_DIR}: ${l.join(', ')}` : `No profiles in ${PROFILE_DIR}.`)]; }
+    let name = a.name; if (!name) { try { name = current(a.project_id).profile; } catch {} }
+    const pr = loadProfile(name); if (!pr) throw new Error(`No style profile "${name || 'default'}" in ${PROFILE_DIR}.`);
+    return [text(profileBlock(pr).trim())];
+  },
+
   async frame_state(a) {
     const p = current(a.project_id);
     let s = describe(p);
+    if (p.profile) s += `\n\nStyle profile: "${p.profile}" applies (frame_profile shows it).`;
     if (a.include_transcript) for (const as of Object.values(p.assets)) if (as.transcript) s += `\n\nTranscript ${as.id} (source seconds):\n${transcriptLines(as.transcript.words)}`;
     if (a.include_timeline_words) { const w = timelineWords(p, a.track || 'V1'); s += `\n\nWords as they now fall on the timeline (${a.track || 'V1'}):\n${transcriptLines(w)}`; }
     const rn = p.renders.at(-1); if (rn) s += `\n\nLast render: ${rn.status}${rn.file ? ' · ' + rn.file : ''}${rn.progress != null && rn.status === 'rendering' ? ` · ${Math.round(rn.progress * 100)}%` : ''}`;
@@ -494,6 +565,8 @@ async function uiAction(b) {
     case 'undo': case 'redo': if (timeTravel(p, b.action)) { feed(p, { actor: 'user', kind: 'op', op: b.action, text: b.action === 'undo' ? 'Undo' : 'Redo' }); say('manual edit', `User pressed ${b.action}; re-read the timeline with frame_state.`); } break;
     case 'render': callTool('frame_render', { project_id: p.id, quality: b.quality, why: 'Requested from the Frame window' }); say('control', `User started a ${b.quality || 'final'} render from the Frame window.`); return { ok: true };
     case 'reveal': { const r = p.renders.find((x) => x.id === b.id); if (r?.file && fs.existsSync(r.file)) { if (process.platform === 'darwin') spawn('open', ['-R', r.file]); else if (process.platform === 'win32') spawn('explorer', [`/select,"${r.file}"`], { windowsVerbatimArguments: true }); else openBrowser(path.dirname(r.file)); } return { ok: true }; }
+    case 'approve': return approveRender(p, b.id);
+    case 'save_clip': return saveClipToLibrary(p, b.id, b.label);
     case 'pack_use': { try { const pk = packs.getPack(b.pack); const as = await importOne(p, packs.packFile(pk, b.item), { actor: 'user', why: `From audio pack "${pk.name}"` }); as.pack = { pack: pk.id, item: b.item }; say('manual edit', `User added ${pk.name} / ${b.item} from the audio pack`); } catch (e) { return { error: e.message }; } break; }
     case 'import': { for (const f of b.paths || []) { try { await importOne(p, f, { actor: 'user' }); say('manual edit', `User imported ${f}`); } catch (e) { return { error: e.message }; } } break; }
   }
