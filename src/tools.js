@@ -164,7 +164,7 @@ Text style: size (fraction of frame height, default 0.055), color, stroke, strok
     inputSchema: { type: 'object', properties: {
       quality: { type: 'string', enum: ['draft', 'final'] }, loudnorm: { type: 'boolean' },
       allow_missing_text: { type: 'boolean', description: 'Render even if some captions cannot be drawn from their current text and style. By default the render refuses rather than ship missing or stale text.' },
-      output_dir: { type: 'string', description: 'Folder for the MP4. Default ~/Movies/Frame.' }, ...why, ...pid,
+      output_dir: { type: 'string', description: 'Folder for the MP4. Default ~/Movies/Frame (~/Videos/Frame on Windows).' }, ...why, ...pid,
     } },
   },
 ];

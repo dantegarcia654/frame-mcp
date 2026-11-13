@@ -28,6 +28,9 @@ try {
   ok('frame_import measures silences', /silences/.test(r.text) && /a1 · video/.test(r.text), r.text.split('\n')[2]?.trim());
   r = await call('frame_edit', { ops: [{ op: 'add_clip', asset: 'a1' }, { op: 'remove_silences', min_silence: 0.4 }, { op: 'add_clip', asset: 'a1', track: 'V2', start: 0.5, in: 1, out: 2, scale: 0.3, x: 0.3, y: -0.3, grade: { saturation: 0 }, fadeIn: 0.2 }, { op: 'update_clip', id: 'missing' }] });
   ok('frame_edit applies ops and reports bad ones', /1\. ✓/.test(r.text) && /2\. ✓ Cut \d+ pauses/.test(r.text) && /4\. ✗/.test(r.text));
+  // The test clip ends in silence; cutting it must not leave a few frames of dead air behind as their own clip.
+  const v1 = [...(r.text.split('\nV1:\n')[1] || '').split(/\n\S/)[0].matchAll(/· ([\d.]+)–([\d.]+)s ·/g)].map((m) => m[2] - m[1]);
+  ok('remove_silences leaves no scraps of dead air', v1.length > 0 && Math.min(...v1) >= 0.1, `${v1.length} clips on V1, shortest ${Math.min(...v1).toFixed(2)}s`);
   r = await call('frame_view', { t: 1 });
   ok('frame_view returns an image', r.content.some((c) => c.type === 'image' && c.data.length > 2000));
   await fetch(`${base}/api/ui`, { method: 'POST', body: JSON.stringify({ action: 'message', text: 'make it shorter' }) });

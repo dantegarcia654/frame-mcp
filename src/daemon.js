@@ -143,7 +143,7 @@ function transcriptLines(words) {
 }
 
 async function importOne(p, file, opts) {
-  file = path.resolve(file.replace(/^~(?=\/)/, os.homedir()));
+  file = path.resolve(file.replace(/^~(?=[\\/])/, os.homedir()));
   if (!fs.existsSync(file)) throw new Error(`File not found: ${file}`);
   const existing = Object.values(p.assets).find((a) => a.path === file);
   if (existing) return existing;
@@ -230,7 +230,7 @@ const handlers = {
     const p = current(a.project_id);
     let files = [];
     for (const f of a.paths || []) {
-      const abs = path.resolve(String(f).replace(/^~(?=\/)/, os.homedir()));
+      const abs = path.resolve(String(f).replace(/^~(?=[\\/])/, os.homedir()));
       if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) files.push(...fs.readdirSync(abs).filter((n) => media.kindFromExt(n)).sort().map((n) => path.join(abs, n)));
       else files.push(abs);
     }
@@ -422,8 +422,8 @@ const handlers = {
     const quality = a.quality === 'draft' ? 'draft' : 'final';
     const n = p.renders.length + 1;
     const safe = p.name.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'frame';
-    const movies = path.join(os.homedir(), 'Movies');
-    const outDir = mkdirp(a.output_dir ? path.resolve(a.output_dir.replace(/^~(?=\/)/, os.homedir())) : path.join(fs.existsSync(movies) ? movies : os.homedir(), 'Frame'));
+    const videos = ['Movies', 'Videos'].map((d) => path.join(os.homedir(), d)).find((d) => fs.existsSync(d)); // macOS, Windows
+    const outDir = mkdirp(a.output_dir ? path.resolve(a.output_dir.replace(/^~(?=[\\/])/, os.homedir())) : path.join(videos || os.homedir(), 'Frame'));
     const file = path.join(outDir, `${safe}_v${n}${quality === 'draft' ? '_draft' : ''}.mp4`);
     const g = buildGraph(p, { rasters: p.rasters, assetPath: assetPath(p), scale: quality === 'draft' ? 0.5 : 1, loudnorm: a.loudnorm !== false });
     const r = { id: 'r' + n, status: 'rendering', progress: 0, file, quality, startedAt: Date.now(), timelineVersion: p.version };
@@ -493,7 +493,7 @@ async function uiAction(b) {
     }
     case 'undo': case 'redo': if (timeTravel(p, b.action)) { feed(p, { actor: 'user', kind: 'op', op: b.action, text: b.action === 'undo' ? 'Undo' : 'Redo' }); say('manual edit', `User pressed ${b.action}; re-read the timeline with frame_state.`); } break;
     case 'render': callTool('frame_render', { project_id: p.id, quality: b.quality, why: 'Requested from the Frame window' }); say('control', `User started a ${b.quality || 'final'} render from the Frame window.`); return { ok: true };
-    case 'reveal': { const r = p.renders.find((x) => x.id === b.id); if (r?.file && fs.existsSync(r.file)) { if (process.platform === 'darwin') spawn('open', ['-R', r.file]); else openBrowser(path.dirname(r.file)); } return { ok: true }; }
+    case 'reveal': { const r = p.renders.find((x) => x.id === b.id); if (r?.file && fs.existsSync(r.file)) { if (process.platform === 'darwin') spawn('open', ['-R', r.file]); else if (process.platform === 'win32') spawn('explorer', [`/select,"${r.file}"`], { windowsVerbatimArguments: true }); else openBrowser(path.dirname(r.file)); } return { ok: true }; }
     case 'pack_use': { try { const pk = packs.getPack(b.pack); const as = await importOne(p, packs.packFile(pk, b.item), { actor: 'user', why: `From audio pack "${pk.name}"` }); as.pack = { pack: pk.id, item: b.item }; say('manual edit', `User added ${pk.name} / ${b.item} from the audio pack`); } catch (e) { return { error: e.message }; } break; }
     case 'import': { for (const f of b.paths || []) { try { await importOne(p, f, { actor: 'user' }); say('manual edit', `User imported ${f}`); } catch (e) { return { error: e.message }; } } break; }
   }

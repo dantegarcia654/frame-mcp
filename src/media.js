@@ -126,8 +126,9 @@ export async function sceneCuts(file, threshold = 0.3) {
 
 /** Word-level transcript via a locally installed Whisper. Returns null if none is installed. */
 export async function whisperAvailable() {
-  for (const c of [['whisper', ['--help']], ['python3', ['-m', 'whisper', '--help']]]) {
-    try { const r = await run(c[0], c[1], { strict: false, timeout: 20000 }); if (r.code === 0 && /word_timestamps/.test(r.stdout + r.stderr)) return c[0] === 'whisper' ? ['whisper'] : ['python3', '-m', 'whisper']; } catch {}
+  // Windows has no python3 (that name opens the Microsoft Store); it is python or py there.
+  for (const c of [['whisper'], ['python3', '-m', 'whisper'], ['python', '-m', 'whisper'], ['py', '-m', 'whisper']]) {
+    try { const r = await run(c[0], [...c.slice(1), '--help'], { strict: false, timeout: 20000 }); if (r.code === 0 && /word_timestamps/.test(r.stdout + r.stderr)) return c; } catch {}
   }
   return null;
 }
