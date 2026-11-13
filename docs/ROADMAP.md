@@ -1,6 +1,29 @@
 # Where Frame stands and what would improve it
 
-Version 1.0.0, 12 November 2026. Built and tested on one Mac (macOS, Node 24, ffmpeg 9, Chrome).
+Version 1.2.0, 13 November 2026. Built and tested on one Mac (macOS, Node 24, ffmpeg 9, Chrome). The sections below the priority list are from 1.0.0 (12 November) except where marked.
+
+## Priority: this repo is the installable product (decided 13 November 2026)
+
+frame-mcp is the product people install. The private `frame-creative-agent` repo holds the earlier consumer-app work; its branch map is in that repo's `docs/REPO-MAP.md`. Pieces proven there get ported here with their tests, not the other way round.
+
+Next, in order:
+
+1. **Bring the editing-room features from the sketch-to-demo copy into this repo.** The two reels on 13 November were edited in a copy of Frame (1.1.0) that now has features this repo doesn't. Port each one with a smoke check:
+   - **+ Text** and **T**
+   - drag captions in the preview
+   - double-click to edit text in place, and a side panel that doesn't wipe typing
+   - caption size handle and A− / A+
+   - Lines (Auto, 1–4)
+   - slip (Option-drag and frame-step buttons)
+   - save a clip to the Frame Inbox library
+   - Approve & save to `~/Movies/Frame/Approved`
+   - style profiles (`~/.frame/profiles`, `frame_profile`)
+
+   This repo already has ripple. Then the sketch-to-demo runner can use this repo instead of its own copy. See `docs/CASE-STUDY-2026-11-13-SKETCH-TO-DEMO.md`.
+2. **A one-line install:** publish to npm so it's `npx -y frame-mcp install`, and add an install check that finds ffmpeg, Chrome (for headless text) and Whisper.
+3. **The fast footage path:** hardware-accelerated preview copies, scene detection on the preview copy, transcripts only when a clip has speech, and slot tags at upload. Measured on one 22.7 s 4K clip, this cut processing from ≈18 s to ≈5.6 s.
+4. **Let Claude see the video:** `frame_watch`, shot memory, `frame_check` and an approve gate. See `docs/PROPOSAL-SEEING.md`, PRs 3–6.
+5. **An HTTP MCP endpoint**, so ChatGPT in the browser can connect (it can't reach a local stdio server).
 
 ## What has actually been verified
 
