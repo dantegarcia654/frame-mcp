@@ -558,7 +558,13 @@ export function startDaemon() {
         if (url.pathname === '/api/raster') {
           const p = load(url.searchParams.get('project')); const id = url.searchParams.get('clip');
           const c = p?.clips.find((x) => x.id === id); if (!c) return json(res, { error: 'no clip' }, 404);
-          storeRaster(p, c, await body(req), Number(url.searchParams.get('x')), Number(url.searchParams.get('y')), textHash(p, c), 'window');
+          // The window says which text and style it drew. Store the upload under that key, and only if it is still the clip's
+          // current text and style: a slow upload of an older look must never be stamped as current.
+          let drawn; try { drawn = decodeURIComponent(req.headers['x-frame-text-key'] || ''); } catch { drawn = ''; }
+          if (!drawn) return json(res, { error: 'missing X-Frame-Text-Key: say which text and style this image was drawn from' }, 400);
+          const png = await body(req);
+          if (drawn !== textHash(p, c)) return json(res, { error: 'stale: this caption changed since it was drawn', stale: true }, 409);
+          storeRaster(p, c, png, Number(url.searchParams.get('x')), Number(url.searchParams.get('y')), drawn, 'window');
           save(p); return json(res, { ok: true });
         }
         if (url.pathname === '/api/shutdown') { json(res, { ok: true }); setTimeout(() => process.exit(0), 100); return; }

@@ -473,7 +473,7 @@ async function rasterizeTexts() {
     rasterBusy.add(c.id + hash);
     const { x, y, canvas } = rasterText(c, P.width, P.height, (w, h) => new OffscreenCanvas(w, h));
     const blob = await canvas.convertToBlob({ type: 'image/png' });
-    fetch(`/api/raster?project=${P.id}&clip=${c.id}&x=${x}&y=${y}`, { method: 'POST', body: blob }).finally(() => setTimeout(() => rasterBusy.delete(c.id + hash), 3000));
+    fetch(`/api/raster?project=${P.id}&clip=${c.id}&x=${x}&y=${y}`, { method: 'POST', headers: { 'X-Frame-Text-Key': encodeURIComponent(hash) }, body: blob }).finally(() => setTimeout(() => rasterBusy.delete(c.id + hash), 3000));
   }
 }
 

@@ -106,6 +106,34 @@ try {
   ok('replace_source refuses a range past the end of the footage', /✗ replace_source: .* Nothing was changed/.test(r.text));
   r = await call('frame_edit', { ops: [{ op: 'set_project', magnetic: false }, { op: 'add_clip', asset: 'a1', in: 0, out: 1, start: 4 }] });
   ok('gaps on V1 are reported after an edit', /⚠ V1: [\d.]+s gap/.test(r.text), r.text.match(/⚠.*/)?.[0] || 'no warning');
+
+  // ── A caption image uploaded for older text or style is refused, never stamped as current.
+  const { textKey } = await import('../ui/text-draw.js');
+  r = await call('frame_start', { name: 'raster', aspect: '9:16' });
+  const rpid = r.text.match(/\((p_\w+)\)/)?.[1];
+  r = await call('frame_edit', { ops: [{ op: 'add_text', text: 'OLD', start: 0, duration: 2 }] });
+  const rid = r.text.match(/\[(c_\w+)\]/)?.[1];
+  const readProj = () => JSON.parse(fs.readFileSync(path.join(env.FRAME_HOME, 'projects', rpid, 'project.json'), 'utf8'));
+  const oldKey = textKey(readProj().clips.find((c) => c.id === rid), 1080, 1920);
+  await call('frame_edit', { ops: [{ op: 'update_clip', id: rid, text: 'NEW' }] });
+  const png = fs.readFileSync(spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=red:s=8x8', '-frames:v', '1', path.join(tmp, 'p.png')]) && path.join(tmp, 'p.png'));
+  const up = (key) => fetch(`${base}/api/raster?project=${rpid}&clip=${rid}&x=0&y=0`, { method: 'POST', headers: key == null ? {} : { 'X-Frame-Text-Key': encodeURIComponent(key) }, body: png });
+  const stale = await up(oldKey), unlabelled = await up(null);
+  const afterStale = readProj().rasters?.[rid];
+  const newKey = textKey(readProj().clips.find((c) => c.id === rid), 1080, 1920);
+  const fresh = await up(newKey);
+  ok('an upload drawn from older text is refused, not stamped current', stale.status === 409 && unlabelled.status === 400 && (!afterStale || afterStale.hash === newKey && afterStale.by !== 'window') && fresh.status === 200 && readProj().rasters[rid].hash === newKey,
+    `stale ${stale.status}, unlabelled ${unlabelled.status}, current ${fresh.status}`);
+
+  // ── Moving a clip off the magnetic track closes the hole it leaves.
+  await call('frame_start', { name: 'move-off', aspect: '16:9' });
+  await call('frame_import', { paths: [clip] });
+  r = await call('frame_edit', { ops: [{ op: 'keep_ranges', asset: 'a1', ranges: [{ in: 0, out: 1 }, { in: 2, out: 3 }, { in: 4, out: 5 }] }] });
+  const [m1, m2, m3] = [...r.text.matchAll(/c_\w+/g)].map((m) => m[0]).filter((v, i, a) => a.indexOf(v) === i);
+  r = await call('frame_edit', { ops: [{ op: 'update_clip', id: m2, track: 'V2' }] });
+  ok('moving a V1 clip to V2 closes the gap on V1', new RegExp(`${m3} · 1–2s`).test(r.text) && new RegExp(`V2:\\n  ${m2} · 1–2s`).test(r.text) && !/⚠ V1/.test(r.text), r.text.split('\n')[0]);
+  r = await call('frame_edit', { ops: [{ op: 'add_clip', asset: 'a1', track: 'V2', start: 4, in: 0, out: 0.5 }, { op: 'update_clip', id: m1, track: 'V2', start: 6 }] });
+  ok('moving a clip onto V2 does not pack V2', new RegExp(`${m2} · 1–2s`).test(r.text) && /· 4–4\.5s/.test(r.text) && new RegExp(`${m1} · 6–7s`).test(r.text) && new RegExp(`${m3} · 0–1s`).test(r.text), r.text.split('\n').slice(0, 2).join(' | ').slice(0, 200));
 } finally {
   daemon.kill(); fs.rmSync(tmp, { recursive: true, force: true });
 }

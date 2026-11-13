@@ -203,14 +203,18 @@ export function applyOp(p, a, ctx = {}) {
       try { if (a.track && a.track !== c.track) { ensureTrack(p, a.track); checkKindTrack(c.kind, a.track); } setProps(p, c, a); }
       catch (e) { Object.assign(c, JSON.parse(backup)); throw e; }
       const parts = [];
-      if (isMag(p, c) && a.ripple !== false) {
+      // Ripple when the clip is on, or has just left, a magnetic track. Only magnetic tracks are repacked: moving a clip
+      // from V1 to V2 must close the hole on V1 without packing the free-form V2.
+      const magTrack = (t) => p.magnetic !== false && c.kind !== 'text' && (p.magneticTracks || ['V1']).includes(t);
+      if (a.ripple !== false && (magTrack(c.track) || magTrack(before.track))) {
         const delta = round(dur(c) - before.dur);
         if (c.track === before.track && Math.abs(delta) >= EPS) { // trim / extend / speed change: the left edge stays, everything after follows
           c.start = before.start; rippleAfter(p, c, before.start + before.dur, delta);
           parts.push(`rippled ${delta > 0 ? '+' : ''}${delta}s`);
         } else if (c.start !== before.start || c.track !== before.track) { // moved: it drops where it was released, the rest close up
-          repack(p, c.track); if (before.track !== c.track && p.magnetic !== false) repack(p, before.track);
-          parts.push('rippled into place');
+          if (magTrack(c.track)) repack(p, c.track);
+          if (before.track !== c.track && magTrack(before.track)) { repack(p, before.track); parts.push(`closed the gap on ${before.track}`); }
+          else parts.push('rippled into place');
         }
       }
       if (c.track !== before.track) parts.push(`moved to ${c.track}`);
