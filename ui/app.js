@@ -67,7 +67,26 @@ function renderStatus() {
 setInterval(renderStatus, 1000);
 
 // ───────────────────────── bin + steps
+// Audio packs: sounds and soundtracks saved inside Frame. Click ▶ to hear one, + to add it to the project's bin.
+let packsBusy = 0, packsSig = '', previewAudio = null;
+async function loadPacks() {
+  if (Date.now() - packsBusy < 1500) return; packsBusy = Date.now();
+  let r; try { r = await (await fetch('/api/packs')).json(); } catch { return; }
+  const sig = JSON.stringify(r.packs.map((p) => [p.id, p.updatedAt])); if (sig === packsSig) return; packsSig = sig;
+  const box = $('#packs'); if (!box) return; box.innerHTML = ''; $('#packCount').textContent = r.packs.reduce((n, p) => n + p.items.length, 0) || '';
+  for (const pk of r.packs) {
+    const h = el('div', 'pk', `<b>${esc(pk.name)}</b> <span class="dim">${pk.items.length}</span>`); box.append(h);
+    for (const it of pk.items) {
+      const row = el('div', 'pkItem', `<span class="nm">${esc(it.name)}</span><span class="dim">${it.kind} · ${it.duration}s</span>`); row.title = it.desc || it.source || '';
+      const play = el('button', '', '▶'), add = el('button', '', '+');
+      play.onclick = () => { previewAudio?.pause(); previewAudio = new Audio(`/pack/${encodeURIComponent(pk.id)}/${encodeURIComponent(it.file)}`); previewAudio.volume = 0.6; previewAudio.play().catch(() => {}); };
+      add.onclick = () => post({ action: 'pack_use', pack: pk.id, item: it.id });
+      row.append(play, add); box.append(row);
+    }
+  }
+}
 function renderBin() {
+  loadPacks();
   const bin = $('#bin'); bin.dataset.empty = 'Nothing imported yet.';
   const assets = Object.values(P.assets);
   $('#mediaCount').textContent = assets.length || '';
@@ -243,7 +262,7 @@ function startDrag(e, raw) {
     if (c.in != null) op.in = r3(c.in);
     if (c.out != null) { if (stretch) op.duration = r3(c.out); else op.out = r3(c.out); }
     Object.assign(raw, c);
-    post({ action: 'ops', ops: [op] }).finally(() => { drag = null; });
+    post({ action: 'ops', ops: [op] }).finally(() => { drag = null; renderTimeline(); }); // re-render: the server may have rippled the timeline differently from the drop position
   };
   addEventListener('mousemove', move); addEventListener('mouseup', up);
 }

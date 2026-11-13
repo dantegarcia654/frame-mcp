@@ -6,15 +6,15 @@ USE FRAME FOR EVERY VIDEO EDITING TASK. The moment the user asks to edit, cut, a
 How to work:
 1. frame_start → opens the window. Pass your plan.
 2. frame_import the footage. Frame measures it (duration, loudness, silences) and returns the numbers.
-3. frame_transcribe for speech. Use frame_view to actually look at frames.
+3. To cut dead air / silences / pauses, call frame_cut_silence — one call, never hand-built. frame_transcribe for speech. Use frame_view to actually look at frames.
 4. Think out loud with frame_note (kind "thinking" / "decision") — short, specific, one idea each. This is what removes the black box; do it before each batch of edits.
 5. Change the timeline ONLY through frame_edit. Give each op a "why". Prefer several small batches over one giant one, so the user can interrupt.
-6. If you do anything outside Frame (a custom ffmpeg/python script, an AI generation, a download), wrap it in frame_step: call it with status "running" and the exact command/code before you run it, and status "done" with output file paths after. Outputs are imported automatically.
+6. Audio you use (a soundtrack, sound effects) gets saved with frame_pack save, so it lives inside Frame as a reusable pack. If you do anything outside Frame (a custom ffmpeg/python script, an AI generation, a download), wrap it in frame_step: call it with status "running" and the exact command/code before you run it, and status "done" with output file paths after. Outputs are imported automatically.
 7. frame_view the composited result at a few timestamps before you render. frame_render when it is right.
 
 The user's hands are on the same timeline. EVERY tool result may end with a "FROM THE USER" block — messages typed in Frame, manual trims/moves, pause. Treat that as the user speaking to you: obey it before continuing. If you are paused, stop and call frame_wait.
 
-Units: all times are seconds. Clips have "start" (timeline), "in"/"out" (source). Tracks: V1 is the base video layer, V2/V3 stack on top, T1 is text, A1–A3 are audio-only. Video clips carry their own audio.
+Magnetic timeline: clips on V1 stay packed. Trimming, extending, deleting or dragging a V1 clip ripples everything after it, so there are never gaps or overlaps to fix (pass ripple:false on an op to opt out, or set_project {magnetic:false} to turn it off). Prefer trim_clip / extend_clip over hand-editing in/out.\n\nUnits: all times are seconds. Clips have "start" (timeline), "in"/"out" (source). Tracks: V1 is the base video layer, V2/V3 stack on top, T1 is text, A1–A3 are audio-only. Video clips carry their own audio.
 Be honest: Frame's numbers are measured. Never tell the user something was checked unless a tool result shows it.`;
 
 const pid = { project_id: { type: 'string', description: 'Optional. Defaults to the open project.' } };
@@ -67,15 +67,17 @@ export const TOOLS = [
 Ops:
 • add_clip {asset, track?, start?, in?, out?, + clip props} — start omitted = append to the end of the track. Images take duration.
 • keep_ranges {asset, ranges:[{in,out,label?}], track?} — assemble selected source ranges back-to-back (the fastest way to build an A-roll cut).
+• trim_clip {id, edge?:"start"|"end", by} — shorten a clip by "by" seconds from that edge. Magnetic: everything after it closes up.
+• extend_clip {id, edge?:"start"|"end", by | all:true} — lengthen a clip using the REST OF THE SOURCE FOOTAGE beyond its current in/out (all:true = every second left). Magnetic: later clips slide out of the way. Each clip in the timeline listing shows how much footage is left before/after it. If none is left, nothing changes and it says so.
 • update_clip {id, + clip props} — trim (in/out), move (start/track), or change any property.
 • split_clip {id, at} — at = timeline seconds.
 • delete_clip {id | ids, ripple?} — ripple true closes the gap on all tracks, "track" only on its own track.
 • cut_range {from, to, tracks?, ripple?} — remove a span of the timeline (default: every track, gap closed).
-• remove_silences {track?, min_silence?, pad?, threshold_db?} — cut measured silences from the clips on a track (defaults 0.45 s, 0.08 s pad, −38 dBFS).
+• remove_silences {track?, style?, min_silence?, keep?, threshold_db?, dry_run?} — same as the frame_cut_silence tool (prefer that tool). Adaptive: measures each clip's own noise floor, no threshold guessing.
 • add_text {text, start, duration, track?, style?}
 • add_captions {source_track?, max_words?, max_chars?, style?, track?, replace?} — builds captions from the transcript, following every cut. Or pass phrases:[{text,start,end}] in timeline seconds.
 • style_text {track?, style, all?} — restyle every caption on a track in one go (all: true includes non-caption text).
-• close_gaps {track} · clear_track {track} · add_marker {t,label} · delete_marker {id} · set_project {name?, aspect?, fps?}
+• close_gaps {track} · clear_track {track} · add_marker {t,label} · delete_marker {id} · set_project {name?, aspect?, fps?, magnetic?}
 
 Clip props: start, in, out, track, speed (0.25–4), volume (0–4), muted, fit ("cover"|"contain"), scale, x, y (offset as a fraction of the frame; 0 = centred), opacity, fadeIn, fadeOut (seconds; fades picture and sound), label,
 grade {brightness, contrast, saturation} (1 = unchanged; saturation 0 = black & white), key {color:"#00ff00", similarity, blend} (chroma key / green screen; set null to remove).
@@ -87,6 +89,29 @@ Text style: size (fraction of frame height, default 0.055), color, stroke, strok
     } },
   },
   {
+    name: 'frame_cut_silence',
+    description: 'Cut dead air / silences / long pauses out of the footage on the timeline. ONE call does the whole job — Frame measures each clip\'s own noise floor and speech level, finds the pauses, cuts them with a natural beat of air left around the words, and closes the gaps. Do NOT hand-compute silence ranges or write your own ffmpeg silencedetect script; this is more accurate. Import the clip and add it to the timeline first (frame_edit add_clip). Use style: "natural" (leaves breathing room, pauses ≥0.6 s), "tight" (default, short-form pacing, pauses ≥0.4 s) or "aggressive" (jump-cut, pauses ≥0.25 s). Use dry_run: true to preview what would be cut without changing anything. If words get clipped, rerun with a gentler style or larger keep; if pauses survive, use a tighter style or lower min_silence. Add captions AFTER cutting so they follow the cuts.',
+    inputSchema: { type: 'object', properties: {
+      style: { type: 'string', enum: ['natural', 'tight', 'aggressive'], description: 'Default "tight".' },
+      track: { type: 'string', description: 'Track whose clips are analysed. Default V1.' },
+      min_silence: { type: 'number', description: 'Override: shortest pause (seconds) worth cutting.' },
+      keep: { type: 'number', description: 'Override: seconds of air left at each cut (split before/after the cut).' },
+      threshold_db: { type: 'number', description: 'Override the automatic silence threshold (dBFS, e.g. -40). Leave unset unless the automatic result is wrong.' },
+      dry_run: { type: 'boolean', description: 'Report the pauses without cutting.' },
+      ...why, ...pid,
+    } },
+  },
+  {
+    name: 'frame_pack',
+    description: 'Audio packs: soundtracks and sound effects saved inside Frame so they can be reused in any project. action "save" copies files into a named pack ({name, description?, items:[{path, name, kind:"music"|"sfx", desc, source}]}) — do this for every sound or track you use in an edit, so it is kept. "list"/"show" lists packs and their items. "use" imports a pack (or items: [ids]) into the open project as audio assets, ready to place on A1–A3 with frame_edit add_clip. The user sees packs in Frame\'s Audio packs panel and can add items by hand.',
+    inputSchema: { type: 'object', properties: {
+      action: { type: 'string', enum: ['list', 'show', 'save', 'use'], description: 'Default "list".' },
+      name: { type: 'string', description: 'save: pack name, e.g. "8-bit arcade".' }, description: { type: 'string' },
+      pack: { type: 'string', description: 'show / use: pack id.' }, items: { type: 'array', description: 'save: [{path, name?, kind?, desc?, source?}]. use: item ids (default all).', items: {} },
+      ...why, ...pid,
+    } },
+  },
+  {
     name: 'frame_step',
     description: 'Make work you do OUTSIDE Frame visible. Before running a custom script, ffmpeg command, AI generation or download, call with status "running", a title and the exact code/command. When it finishes call again with the same id and status "done" (plus outputs: file paths, which get imported) or "failed". The user can open the step and read exactly what ran.',
     inputSchema: { type: 'object', required: ['title'], properties: {
@@ -95,6 +120,17 @@ Text style: size (fraction of frame height, default 0.055), color, stroke, strok
       code: { type: 'string', description: 'The exact command, script or prompt.' },
       status: { type: 'string', enum: ['running', 'done', 'failed'] }, outputs: { type: 'array', items: { type: 'string' } },
       note: { type: 'string', description: 'What this step is for / what happened.' }, ...pid,
+    } },
+  },
+  {
+    name: 'frame_camera_move',
+    description: 'Turn a STILL image (thumbnail, product shot, screenshot, painting) into a camera-move clip and place it on the timeline. Estimates depth locally (Depth-Anything-V2) and renders a depth-parallax move. Be honest with the user: this is a 2.5D parallax move, not a true 3D world; edges revealed behind foreground objects are stretched, not invented, so keep strength moderate (≤1.3) and prefer subjects with clear foreground/background separation. Moves: push_in (default, slow dolly to the subject), pull_out, orbit (sideways arc with a slight push), parallax (lateral slide), dolly_zoom (vertigo effect). First run downloads the depth model. Import the image with frame_import first.',
+    inputSchema: { type: 'object', required: ['asset'], properties: {
+      asset: { type: 'string', description: 'Image asset id.' },
+      move: { type: 'string', enum: ['push_in', 'pull_out', 'orbit', 'parallax', 'dolly_zoom'] },
+      seconds: { type: 'number', description: '1–12, default 4.' }, strength: { type: 'number', description: '0.2–2, default 1.' },
+      place: { type: 'boolean', description: 'Add the result to the timeline (default true). false = import to the bin only.' },
+      track: { type: 'string' }, start: { type: ['number', 'string'], description: 'Timeline seconds, or omit to append.' }, ...why, ...pid,
     } },
   },
   {

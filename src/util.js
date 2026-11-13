@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 export const PORT = Number(process.env.FRAME_PORT || 4747);
 export const HOME = process.env.FRAME_HOME || path.join(os.homedir(), '.frame');
 export const BASE = `http://127.0.0.1:${PORT}`;

@@ -105,7 +105,7 @@ export function buildGraph(p, o) {
   });
   let aLabel = null;
   if (!o.still) {
-    const tail = `apad,atrim=0:${f(D)}${o.loudnorm ? ',loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000' : ''}[aout]`;
+    const tail = `apad,atrim=0:${f(D)}${o.loudnorm ? ',loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.84:level=disabled,aresample=48000' : ''}[aout]`;
     if (!outs.length) filters.push(`anullsrc=r=48000:cl=stereo,atrim=0:${f(D)}[aout]`);
     else if (outs.length === 1) filters.push(`${outs[0]}${tail}`);
     else filters.push(`${outs.join('')}amix=inputs=${outs.length}:normalize=0:dropout_transition=0,${tail}`);

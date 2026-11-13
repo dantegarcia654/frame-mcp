@@ -25,6 +25,8 @@
     <aside id="left">
       <h3>Media <span id="mediaCount"></span></h3>
       <div id="bin"></div>
+      <h3 class="packH">Audio packs <span id="packCount"></span></h3>
+      <div id="packs"></div>
       <form id="addPath"><input placeholder="Paste a file path to import…" spellcheck="false"><button>+</button></form>
       <h3>Process <span id="stepCount"></span></h3>
       <div id="steps"></div>
@@ -68,7 +70,7 @@
       <span class="dim">Timeline</span>
       <span id="tlinfo" class="dim"></span>
       <div class="grow"></div>
-      <span class="dim keys">Space play · S split · ⌫ delete · ⇧⌫ ripple delete · drag to move · drag edges to trim</span>
+      <span class="dim keys">Space play · S split · ⌫ delete · ⇧⌫ ripple delete · drag to reorder · drag edges to trim or extend (magnetic: the rest follows)</span>
       <button id="fit">Fit</button>
       <input type="range" id="zoom" min="0" max="100" value="0" title="Zoom">
     </div>

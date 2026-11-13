@@ -1,7 +1,7 @@
 // The timeline model and every operation that can change it.
 // Claude (via MCP) and the human (via the UI) both go through applyOp, so the timeline has one source of truth.
 import { uid, round, clamp, tc } from './util.js';
-import { findSilences } from './media.js';
+import { findPauses } from './media.js';
 
 export const ASPECTS = { '9:16': [1080, 1920], '16:9': [1920, 1080], '1:1': [1080, 1080], '4:5': [1080, 1350], '4:3': [1440, 1080] };
 const EPS = 0.001;
@@ -58,6 +58,15 @@ function setProps(p, c, a) {
   if (c.out - c.in < 0.03) throw new Error(`Clip ${c.id} would be shorter than one frame (in ${c.in}, out ${c.out}).`);
   c.start = Math.max(0, round(c.start)); c.in = round(c.in); c.out = round(c.out);
   ensureTrack(p, c.track); checkKindTrack(c.kind, c.track);
+}
+
+/** Magnetic timeline: clips on the base track (V1) stay packed, trims ripple, nothing leaves a hole. set_project {magnetic:false} turns it off. */
+const isMag = (p, c) => p.magnetic !== false && c.kind !== 'text' && (p.magneticTracks || ['V1']).includes(c.track);
+function repack(p, track) { let t = 0; for (const c of trackClips(p, track)) { c.start = round(t); t += dur(c); } }
+function rippleAfter(p, c, edge, delta) {
+  if (Math.abs(delta) < EPS) return;
+  for (const o of p.clips) if (o !== c && o.start >= edge - EPS) o.start = Math.max(0, round(o.start + delta));
+  for (const m of p.markers) if (m.t >= edge - EPS) m.t = Math.max(0, round(m.t + delta));
 }
 
 function addClip(p, a) {
@@ -181,11 +190,21 @@ export function applyOp(p, a, ctx = {}) {
     }
     case 'update_clip': {
       const c = getClip(p, a.id);
-      const before = { start: c.start, in: c.in, out: c.out, track: c.track };
+      const before = { start: c.start, in: c.in, out: c.out, track: c.track, dur: dur(c) };
       const backup = JSON.stringify(c);
       try { if (a.track && a.track !== c.track) { ensureTrack(p, a.track); checkKindTrack(c.kind, a.track); } setProps(p, c, a); }
       catch (e) { Object.assign(c, JSON.parse(backup)); throw e; }
       const parts = [];
+      if (isMag(p, c) && a.ripple !== false) {
+        const delta = round(dur(c) - before.dur);
+        if (c.track === before.track && Math.abs(delta) >= EPS) { // trim / extend / speed change: the left edge stays, everything after follows
+          c.start = before.start; rippleAfter(p, c, before.start + before.dur, delta);
+          parts.push(`rippled ${delta > 0 ? '+' : ''}${delta}s`);
+        } else if (c.start !== before.start || c.track !== before.track) { // moved: it drops where it was released, the rest close up
+          repack(p, c.track); if (before.track !== c.track && p.magnetic !== false) repack(p, before.track);
+          parts.push('rippled into place');
+        }
+      }
       if (c.track !== before.track) parts.push(`moved to ${c.track}`);
       if (c.start !== before.start) parts.push(`start ${tc(before.start)} → ${tc(c.start)}`);
       if (c.in !== before.in) parts.push(`in ${tc(before.in)} → ${tc(c.in)}`);
@@ -197,6 +216,20 @@ export function applyOp(p, a, ctx = {}) {
       if (a.style) parts.push(`style ${Object.keys(a.style).join(', ')}`);
       return { text: `${label(p, c)} · ${parts.join(' · ') || 'no change'}`, clipIds: [c.id], t: c.start };
     }
+    case 'trim_clip': case 'extend_clip': {
+      const c = getClip(p, a.id); if (c.kind === 'text') throw new Error(`${op} works on footage clips; use update_clip with duration for text.`);
+      const asset = p.assets[c.asset], edge = a.edge || 'end';
+      if (!['start', 'end'].includes(edge)) throw new Error('edge must be "start" or "end".');
+      const sp = c.speed || 1, ext = op === 'extend_clip';
+      const room = edge === 'end' ? (asset.kind === 'image' ? Infinity : asset.duration - c.out) : c.in; // source seconds still available
+      if (a.by == null && !(ext && (a.all || a.to_end))) throw new Error(`${op} needs by: seconds${ext ? ' (or all: true to take every second of footage that is left)' : ''}.`);
+      let src = ext ? (a.by == null ? room : Math.min(room, Number(a.by) * sp)) : Math.min(Number(a.by) * sp, (c.out - c.in) - 0.1);
+      if (src < 0.01) return { text: `${label(p, c)} — no more source footage ${edge === 'end' ? 'after' : 'before'} this clip (${edge === 'end' ? `out ${tc(c.out)} of ${tc(asset.duration)}` : `in ${tc(c.in)}`}), nothing changed`, clipIds: [c.id], t: c.start };
+      const props = { id: c.id };
+      if (edge === 'end') props.out = round(c.out + (ext ? src : -src)); else props.in = round(c.in + (ext ? -src : src));
+      const r = applyOp(p, { op: 'update_clip', ...props, ripple: a.ripple }, ctx);
+      return { text: `${ext ? 'Extended' : 'Trimmed'} ${edge} of ${label(p, c)} by ${round(src / sp, 2)}s using ${ext ? 'the rest of the source footage' : 'the clip itself'} · ${r.text.split(' · ').slice(1).join(' · ')}`, clipIds: [c.id], t: c.start };
+    }
     case 'split_clip': {
       const c = getClip(p, a.id);
       const b = splitAt(p, c, Number(a.at));
@@ -204,13 +237,14 @@ export function applyOp(p, a, ctx = {}) {
       return { text: `Split ${label(p, c)} at ${tc(a.at)}`, clipIds: [c.id, b.id], t: Number(a.at) };
     }
     case 'delete_clip': {
-      const ids = a.ids || [a.id]; const names = [];
+      const ids = a.ids || [a.id]; const names = []; let closed = false;
       for (const id of ids) {
         const c = getClip(p, id); names.push(label(p, c));
         p.clips.splice(p.clips.indexOf(c), 1);
-        if (a.ripple) { const tracks = a.ripple === 'track' ? [c.track] : p.tracks; const d = dur(c); for (const o of p.clips) if (tracks.includes(o.track) && o.start >= c.start + d - EPS) o.start = round(o.start - d); }
+        const rip = a.ripple ?? (isMag(p, c) ? true : false);
+        if (rip) { closed = true; const tracks = rip === 'track' ? [c.track] : p.tracks; const d = dur(c); for (const o of p.clips) if (tracks.includes(o.track) && o.start >= c.start + d - EPS) o.start = round(o.start - d); }
       }
-      return { text: `Removed ${names.join(', ')}${a.ripple ? ' and closed the gap' : ''}`, clipIds: [], t: null };
+      return { text: `Removed ${names.join(', ')}${closed ? ' and closed the gap' : ''}`, clipIds: [], t: null };
     }
     case 'cut_range': {
       const from = Number(a.from), to = Number(a.to);
@@ -220,20 +254,33 @@ export function applyOp(p, a, ctx = {}) {
       return { text: `Cut ${tc(from)}–${tc(to)} (${round(to - from, 2)}s)${a.ripple !== false ? ', gap closed' : ''}`, clipIds: ids.filter((id) => p.clips.some((c) => c.id === id)), t: from };
     }
     case 'remove_silences': {
-      const track = a.track || 'V1'; const pad = a.pad ?? 0.08; const ranges = [];
+      // style sets sensible defaults so a caller only has to say how tight it wants the edit.
+      const STYLES = { natural: { min: 0.6, keep: 0.28 }, tight: { min: 0.4, keep: 0.16 }, aggressive: { min: 0.25, keep: 0.1 } };
+      const st = STYLES[a.style || 'tight'];
+      if (!st) throw new Error(`style must be one of ${Object.keys(STYLES).join(', ')}.`);
+      const track = a.track || 'V1', minS = Number(a.min_silence ?? st.min);
+      const keep = Number(a.keep ?? (a.pad != null ? a.pad * 2 : st.keep)); // air left in total at each cut
+      const before = keep * 0.55, after = keep * 0.45; // a little more tail after a word than lead-in before the next
+      const ranges = [], skipped = [], info = [];
       for (const c of trackClips(p, track)) {
-        const env = ctx.loadEnv?.(c.asset); if (!env) continue;
-        for (const s of findSilences(env, { threshold_db: a.threshold_db ?? -38, min_silence: a.min_silence ?? 0.45 })) {
-          const si = Math.max(s.start + pad, c.in), so = Math.min(s.end - pad, c.out);
-          if (so - si < 0.12) continue;
-          ranges.push([c.start + (si - c.in) / c.speed, c.start + (so - c.in) / c.speed]);
+        const env = ctx.loadEnv?.(c.asset); if (!env) { skipped.push(label(p, c)); continue; }
+        const r = findPauses(env, { threshold_db: a.threshold_db, min_silence: minS, from: c.in, to: c.out });
+        info.push(`${label(p, c)}: noise floor ${r.floor_db} dB, speech ${r.speech_db} dB, threshold ${r.threshold_db} dB`);
+        for (const s of r.pauses) {
+          // At the very head/tail of a clip there is no word on that side to protect, so no air is kept there.
+          const si = s.start <= c.in + 0.05 ? c.in : s.start + before, so = s.end >= c.out - 0.05 ? c.out : s.end - after;
+          const a0 = Math.max(si, c.in), b0 = Math.min(so, c.out);
+          if (b0 - a0 < 0.1) continue;
+          ranges.push([c.start + (a0 - c.in) / c.speed, c.start + (b0 - c.in) / c.speed]);
         }
       }
-      if (!ranges.length) return { text: `No silences longer than ${a.min_silence ?? 0.45}s found on ${track}`, clipIds: [], t: null };
+      const note = `${skipped.length ? ` (no audio measurement for ${skipped.join(', ')} — skipped)` : ''}`;
+      if (!ranges.length) return { text: `No pauses ≥ ${minS}s found on ${track}${info.length ? ` — ${info.join('; ')}` : ''}${note}`, clipIds: [], t: null };
       ranges.sort((x, y) => y[0] - x[0]);
-      let removed = 0;
-      for (const [f, t] of ranges) { cutRange(p, f, t, p.tracks, true); removed += t - f; }
-      return { text: `Removed ${ranges.length} measured silences on ${track} (${round(removed, 2)}s), kept ${pad}s of air around speech`, clipIds: trackClips(p, track).map((c) => c.id), t: 0, cuts: ranges.length };
+      const total = ranges.reduce((n, [f, t]) => n + (t - f), 0);
+      if (a.dry_run) return { text: `DRY RUN — would remove ${ranges.length} pauses (${round(total, 2)}s) on ${track}: ${ranges.slice().reverse().slice(0, 30).map(([f, t]) => `${round(f, 2)}–${round(t, 2)}`).join(', ')}${ranges.length > 30 ? ' …' : ''}. ${info.join('; ')}. Nothing changed.`, clipIds: [], t: null };
+      for (const [f, t] of ranges) cutRange(p, f, t, p.tracks, true);
+      return { text: `Cut ${ranges.length} pauses on ${track} (${round(total, 2)}s removed, ${a.style || 'tight'}: pauses ≥ ${minS}s, ${round(keep, 2)}s of air kept). ${info.join('; ')}${note}`, clipIds: trackClips(p, track).map((c) => c.id), t: 0, cuts: ranges.length };
     }
     case 'style_text': {
       const track = a.track || 'T1';
@@ -265,10 +312,11 @@ export function applyOp(p, a, ctx = {}) {
       if (a.name) p.name = a.name;
       if (a.aspect) { const np = newProject({ aspect: a.aspect }); p.width = np.width; p.height = np.height; }
       if (a.fps) p.fps = clamp(Number(a.fps), 12, 60);
+      if (a.magnetic !== undefined) { p.magnetic = !!a.magnetic; if (p.magnetic) for (const t of p.magneticTracks || ['V1']) repack(p, t); }
       return { text: `Project: ${p.name} · ${p.width}×${p.height} · ${p.fps} fps`, clipIds: [], t: null };
     }
     default:
-      throw new Error(`Unknown op "${op}". Ops: add_clip, keep_ranges, add_text, add_captions, style_text, update_clip, split_clip, delete_clip, cut_range, remove_silences, close_gaps, clear_track, add_marker, delete_marker, set_project.`);
+      throw new Error(`Unknown op "${op}". Ops: add_clip, keep_ranges, trim_clip, extend_clip, add_text, add_captions, style_text, update_clip, split_clip, delete_clip, cut_range, remove_silences, close_gaps, clear_track, add_marker, delete_marker, set_project.`);
   }
 }
 
@@ -285,7 +333,7 @@ export function describe(p) {
       const fx = [c.speed !== 1 && `speed ${c.speed}`, c.volume !== 1 && c.volume != null && `vol ${c.volume}`, c.muted && 'muted', c.scale && c.scale !== 1 && `scale ${c.scale}`, (c.x || c.y) && `pos ${c.x},${c.y}`, c.fit === 'contain' && 'contain', c.opacity != null && c.opacity !== 1 && `opacity ${c.opacity}`, c.fadeIn && `fadeIn ${c.fadeIn}`, c.fadeOut && `fadeOut ${c.fadeOut}`, c.grade && `grade ${JSON.stringify(c.grade)}`, c.key && `key ${c.key.color}`].filter(Boolean).join(' · ');
       lines.push(c.kind === 'text'
         ? `  ${c.id} · ${round(c.start, 2)}–${round(end(c), 2)}s · "${c.text.content}"`
-        : `  ${c.id} · ${round(c.start, 2)}–${round(end(c), 2)}s · ${c.asset} src ${c.in}–${c.out}${c.label ? ` · ${c.label}` : ''}${fx ? ` · ${fx}` : ''}`);
+        : `  ${c.id} · ${round(c.start, 2)}–${round(end(c), 2)}s · ${c.asset} src ${c.in}–${c.out}${p.assets[c.asset]?.duration && c.kind !== 'image' ? ` (footage left: ${round(c.in, 1)}s before, ${round(p.assets[c.asset].duration - c.out, 1)}s after)` : ''}${c.label ? ` · ${c.label}` : ''}${fx ? ` · ${fx}` : ''}`);
     }
   }
   if (p.markers.length) lines.push('Markers: ' + p.markers.map((m) => `${m.id}@${m.t}s ${m.label}`).join(' | '));

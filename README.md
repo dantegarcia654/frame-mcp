@@ -22,6 +22,7 @@ Frame is an MCP server. It does not add a new AI or a new kind of video; it give
 - **Steering** — type a message in the window, or press Pause. Claude receives it at its next step.
 - **Nothing hidden** — work Claude does outside the timeline (a script, an ffmpeg command, an AI generation) is logged in a Process panel with the exact code.
 - **Measured, not guessed** — loudness, silences, durations and render results come from ffmpeg and are reported as numbers.
+- **Camera Move (v1.1, prototype)** — `frame_camera_move` turns a still into a push-in, pull-out, orbit, parallax or dolly-zoom clip using a local depth model (Depth-Anything-V2-Small). It is a 2.5D parallax move, not a true 3D world. Needs python3 with `torch transformers opencv-python pillow`.
 - **Black and white.**
 
 ## Requirements
@@ -76,6 +77,7 @@ Projects live in `~/.frame`. Renders go to `~/Movies/Frame` unless Claude is tol
 | `frame_import` | Adds video, audio or images; measures loudness and silences. |
 | `frame_transcribe` | Word-level transcript (local Whisper), or accepts supplied words. |
 | `frame_note` | Shows Claude's thinking and decisions in the feed. |
+| `frame_cut_silence` | One-call dead-air removal. Adaptive to each clip's own noise floor, `natural`/`tight`/`aggressive` styles, `dry_run` preview. |
 | `frame_edit` | Timeline operations, applied live: add, keep ranges, trim, split, move, delete, cut range, remove silences, text, captions, grade, chroma key, scale/position, speed, volume, fades. |
 | `frame_step` | Logs work done outside Frame with its exact code and imports the outputs. |
 | `frame_view` | Returns composited frames (or raw source frames) so Claude can look at its work. |

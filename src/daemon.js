@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { VERSION, PORT, HOME, BASE, sleep, uid, round, mkdirp, run, tc } from './util.js';
 import * as media from './media.js';
+import * as packs from './packs.js';
 import { newProject, applyOp, describe, projectDuration, timelineWords, end } from './project.js';
 import { buildGraph, ffmpegArgs, runFfmpeg } from './render.js';
 import { TOOLS, INSTRUCTIONS } from './tools.js';
@@ -29,7 +30,19 @@ function load(id) {
   if (!fs.existsSync(file)) return null;
   const p = JSON.parse(fs.readFileSync(file, 'utf8'));
   p.status = { state: 'idle', label: 'Idle' }; p.inbox ||= []; p.rasters ||= {};
-  projects.set(id, p); return p;
+  projects.set(id, p); setImmediate(() => ensureProxies(p)); return p;
+}
+/** Backfill light preview proxies for big footage, one at a time in the background (never blocks the user). Renders still use the originals. */
+let proxyChain = Promise.resolve();
+function ensureProxies(p) {
+  for (const a of Object.values(p.assets || {})) {
+    if (a.kind !== 'video' || a.proxy || !a.path || Math.max(a.width || 0, a.height || 0) <= 1280 || !fs.existsSync(a.path)) continue;
+    const out = cacheFile(p, `${a.id}.proxy.mp4`);
+    proxyChain = proxyChain.then(async () => {
+      try { a.busy = 'making preview proxy'; emit(p); await media.makeProxy(a.path, out); a.proxy = true; } catch {}
+      delete a.busy; save(p); emit(p);
+    });
+  }
 }
 function listProjects() {
   const dir = mkdirp(path.join(HOME, 'projects'));
@@ -109,9 +122,9 @@ function assetSummary(p, a) {
   let s = bits.join(' · ');
   const env = loadEnv(p)(a.id);
   if (env) {
-    const sil = media.findSilences(env);
+    const r = media.findPauses(env, { min_silence: 0.4 }), sil = r.pauses;
     const tot = sil.reduce((n, x) => n + (x.end - x.start), 0);
-    s += `\n    silences ≥0.35s (measured, −38 dBFS): ${sil.length}, ${round(tot, 1)}s total${sil.length ? ' → ' + sil.slice(0, 40).map((x) => `${x.start}–${x.end}`).join(', ') + (sil.length > 40 ? ' …' : '') : ''}`;
+    s += `\n    silences ≥0.4s (measured, adaptive threshold ${r.threshold_db} dB over a ${r.floor_db} dB noise floor): ${sil.length}, ${round(tot, 1)}s total${sil.length ? ' → ' + sil.slice(0, 40).map((x) => `${round(x.start, 2)}–${round(x.end, 2)}`).join(', ') + (sil.length > 40 ? ' …' : '') : ''}${sil.length ? '\n    → to remove them, call frame_cut_silence (one call; do not hand-cut)' : ''}`;
   }
   if (a.scenes?.length) s += `\n    scene changes at: ${a.scenes.slice(0, 60).join(', ')}`;
   if (a.transcript) s += `\n    transcript: ${a.transcript.words.length} words (${a.transcript.engine})`;
@@ -247,6 +260,31 @@ const handlers = {
     return [text(`${results.join('\n')}\n\n${describe(p)}`)];
   },
 
+  async frame_cut_silence(a) {
+    const { why: w, project_id, ...args } = a;
+    return handlers.frame_edit({ project_id, summary: a.dry_run ? 'Checking which pauses can be cut' : `Cutting dead air (${a.style || 'tight'})`, ops: [{ op: 'remove_silences', why: w || 'Remove dead air', ...args }] });
+  },
+
+  async frame_pack(a) {
+    const act = a.action || 'list';
+    if (act === 'list' || act === 'show') {
+      const all = a.pack ? [packs.getPack(a.pack)].filter(Boolean) : packs.listPacks();
+      if (a.pack && !all.length) throw new Error(`No audio pack "${a.pack}". Packs: ${packs.listPacks().map((p) => p.id).join(', ') || 'none yet'}`);
+      return [text(all.length ? all.map(packs.describePack).join('\n\n') : 'No audio packs saved yet. Save sounds you use with frame_pack {action:"save", name, items:[{path, name, kind, desc}]}.')];
+    }
+    if (act === 'save') {
+      const r = await packs.savePack(a);
+      return [text(`Saved ${r.saved.length} item${r.saved.length === 1 ? '' : 's'} to pack "${r.pack.name}" (${r.pack.id}); it now has ${r.pack.items.length}. Files live in ${path.join(HOME, 'packs', r.pack.id)} and show in Frame's Audio packs panel.\n\n${packs.describePack(r.pack)}`)];
+    }
+    if (act === 'use') {
+      const p = current(a.project_id); const pk = packs.getPack(a.pack); if (!pk) throw new Error(`No audio pack "${a.pack}". Packs: ${packs.listPacks().map((x) => x.id).join(', ') || 'none yet'}`);
+      const ids = a.items?.length ? a.items : pk.items.map((i) => i.id); const out = [];
+      for (const id of ids) { const as = await importOne(p, packs.packFile(pk, id), { why: a.why || `From audio pack "${pk.name}"` }); as.pack = { pack: pk.id, item: id }; out.push(assetSummary(p, as)); }
+      emit(p); return [text(`Imported ${out.length} from pack "${pk.name}":\n  ${out.join('\n  ')}`)];
+    }
+    throw new Error('frame_pack action must be "list", "show", "save" or "use".');
+  },
+
   async frame_step(a) {
     const p = current(a.project_id);
     let s = a.id && p.steps.find((x) => x.id === a.id);
@@ -260,6 +298,34 @@ const handlers = {
     if (s.status === 'done') for (const f of a.outputs || []) { try { const as = await importOne(p, f, { why: `Output of “${s.title}”` }); (s.outputs ||= []).push(as.id); out.push(assetSummary(p, as)); } catch (e) { out.push(`✗ ${f}: ${e.message}`); } }
     emit(p);
     return [text(`Step ${s.id} is ${s.status} and visible in Frame's Process panel.${out.length ? '\nOutputs imported:\n  ' + out.join('\n  ') : ''}`)];
+  },
+
+  async frame_camera_move(a) {
+    const p = current(a.project_id);
+    const src = p.assets[a.asset]; if (!src || src.kind !== 'image') throw new Error(`frame_camera_move needs an image asset (got "${a.asset}"). Import a still first.`);
+    const move = a.move || 'push_in', seconds = Math.min(12, Math.max(1, Number(a.seconds) || 4)), strength = Math.min(2, Math.max(0.2, Number(a.strength) || 1));
+    const out = cacheFile(p, `cam_${uid()}.mp4`), depth = cacheFile(p, `depth_${uid()}.png`);
+    const script = fileURLToPath(new URL('../scripts/camera_move.py', import.meta.url));
+    const args = [script, src.path, out, '--move', move, '--seconds', String(seconds), '--strength', String(strength), '--size', `${p.width}x${p.height}`, '--fps', String(p.fps), '--depth-out', depth];
+    const code = `python3 ${args.map((x) => (/\s/.test(x) ? JSON.stringify(x) : x)).join(' ')}`;
+    const step = { id: uid('s_'), startedAt: Date.now(), title: `Camera move: ${move} on ${src.name}`, tool: 'Depth-Anything-V2-Small + OpenCV', code, status: 'running', note: 'Depth-based 2.5D parallax. Not a true 3D world; edges revealed behind objects are stretched, not invented.' };
+    p.steps.push(step); feed(p, { kind: 'step', text: `Started: ${step.title}`, stepId: step.id, why: a.why }); emit(p);
+    try { await run('python3', args, { timeout: 600000 }); }
+    catch (e) { step.status = 'failed'; step.endedAt = Date.now(); feed(p, { kind: 'step', text: `Failed: ${step.title}`, why: String(e.message).slice(-300), stepId: step.id }); emit(p); throw new Error(`Camera move failed: ${String(e.message).slice(-400)}. Needs python3 with torch, transformers, opencv-python, pillow (first run downloads the depth model).`); }
+    step.status = 'done'; step.endedAt = Date.now();
+    const asset = await importOne(p, out, { why: `Camera move (${move}) from ${src.name}` });
+    (step.outputs ||= []).push(asset.id);
+    const dm = await importOne(p, depth, { why: 'Depth map used for the move' }).catch(() => null);
+    if (dm) step.outputs.push(dm.id);
+    feed(p, { kind: 'step', text: `Finished: ${step.title}`, stepId: step.id }); emit(p);
+    let msg = `Rendered ${seconds}s ${move} (strength ${strength}) → ${assetSummary(p, asset)}${dm ? `\nDepth map: ${assetSummary(p, dm)}` : ''}`;
+    if (a.place !== false) {
+      snapshot(p);
+      const r = applyOp(p, { op: 'add_clip', asset: asset.id, track: a.track, start: a.start }, { loadEnv: loadEnv(p) });
+      feed(p, { kind: 'op', op: 'add_clip', text: r.text, why: a.why || `Camera move on ${src.name}`, clipIds: r.clipIds, t: r.t }); emit(p, { focus: { clipIds: r.clipIds, t: r.t } });
+      msg += `\n✓ ${r.text} [${r.clipIds.join(', ')}]`;
+    }
+    return [text(msg)];
   },
 
   async frame_view(a) {
@@ -347,7 +413,7 @@ const handlers = {
   },
 };
 
-const MUTATING = new Set(['frame_import', 'frame_edit', 'frame_render', 'frame_step', 'frame_transcribe']);
+const MUTATING = new Set(['frame_pack', 'frame_import', 'frame_edit', 'frame_cut_silence', 'frame_render', 'frame_step', 'frame_transcribe', 'frame_camera_move']);
 let chain = Promise.resolve();
 async function callTool(name, args) {
   const h = handlers[name];
@@ -395,6 +461,7 @@ async function uiAction(b) {
     case 'undo': case 'redo': if (timeTravel(p, b.action)) { feed(p, { actor: 'user', kind: 'op', op: b.action, text: b.action === 'undo' ? 'Undo' : 'Redo' }); say('manual edit', `User pressed ${b.action}; re-read the timeline with frame_state.`); } break;
     case 'render': callTool('frame_render', { project_id: p.id, quality: b.quality, why: 'Requested from the Frame window' }); say('control', `User started a ${b.quality || 'final'} render from the Frame window.`); return { ok: true };
     case 'reveal': { const r = p.renders.find((x) => x.id === b.id); if (r?.file && fs.existsSync(r.file)) { if (process.platform === 'darwin') spawn('open', ['-R', r.file]); else openBrowser(path.dirname(r.file)); } return { ok: true }; }
+    case 'pack_use': { try { const pk = packs.getPack(b.pack); const as = await importOne(p, packs.packFile(pk, b.item), { actor: 'user', why: `From audio pack "${pk.name}"` }); as.pack = { pack: pk.id, item: b.item }; say('manual edit', `User added ${pk.name} / ${b.item} from the audio pack`); } catch (e) { return { error: e.message }; } break; }
     case 'import': { for (const f of b.paths || []) { try { await importOne(p, f, { actor: 'user' }); say('manual edit', `User imported ${f}`); } catch (e) { return { error: e.message }; } } break; }
   }
   emit(p);
@@ -434,6 +501,8 @@ export function startDaemon() {
         if (url.pathname === '/') return sendFile(req, res, path.join(UI_DIR, 'index.html'));
         if (['app.js', 'style.css', 'favicon.svg'].includes(parts[0]) && parts.length === 1) return sendFile(req, res, path.join(UI_DIR, parts[0]));
         if (url.pathname === '/api/ping') return json(res, { name: 'frame', version: VERSION, pid: process.pid, clients: clients.size });
+        if (url.pathname === '/api/packs') return json(res, { packs: packs.listPacks() });
+        if (parts[0] === 'pack' && parts.length === 3) { const pk = packs.getPack(parts[1]); const f = pk && pk.items.find((i) => i.file === parts[2]); return f ? sendFile(req, res, path.join(HOME, 'packs', pk.id, f.file), 'private, max-age=3600') : res.writeHead(404).end(); }
         if (url.pathname === '/api/tools') return json(res, { tools: TOOLS, instructions: INSTRUCTIONS });
         if (url.pathname === '/api/events') {
           res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
