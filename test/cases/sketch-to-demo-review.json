@@ -1,0 +1,85 @@
+{
+  "schema": 1,
+  "case_id": "sketch-to-demo-review",
+  "kind": "manual_acceptance_test",
+  "prepared_by": "Codex",
+  "review_date": "2026-11-13",
+  "overall_status": "partial_requires_visual_and_editability_review",
+  "provenance": "Sanitized timing/status extract from saved artifacts; no new editing run performed for this review. Private source details remain in the owner-facing report.",
+  "recorded_run": {
+    "timer": "process invocation \u2192 verified editable assembly; excludes prior preparation and later render",
+    "fixture": false,
+    "headless": false,
+    "first_clip_ms": 3570.324,
+    "assembly_ms": 24889.123,
+    "under_30_seconds": true,
+    "under_60_seconds": true,
+    "duration": 26.5,
+    "clip_count": 31,
+    "caption_rasters": 15,
+    "acceptance_status": "requires_visual_and_editability_review"
+  },
+  "export": {
+    "probe": {
+      "duration": 26.5,
+      "width": 540,
+      "height": 960,
+      "video": true,
+      "audio": true,
+      "codec": "h264",
+      "bytes": 2977508
+    },
+    "decoded": true,
+    "separate_export_and_decode_ms": 5056.942
+  },
+  "prepared_versions": [
+    {
+      "id": "flappy-turd",
+      "duration_seconds": 26.5,
+      "shots": 16,
+      "editable_titles": 15,
+      "audio_tracks": 1,
+      "source_files": 7,
+      "preflight_passed": true,
+      "executed": false
+    },
+    {
+      "id": "simpsons-doughnut",
+      "duration_seconds": 22.1,
+      "shots": 12,
+      "editable_titles": 10,
+      "audio_tracks": 1,
+      "source_files": 7,
+      "preflight_passed": true,
+      "executed": false
+    },
+    {
+      "id": "moneystack",
+      "duration_seconds": 22.1,
+      "shots": 12,
+      "editable_titles": 10,
+      "audio_tracks": 1,
+      "source_files": 7,
+      "preflight_passed": true,
+      "executed": false
+    }
+  ],
+  "new_versions_executed": false,
+  "missing_shots_policy": "Skip to next shot and ripple timing; no substitute footage",
+  "timing_exclusions": [
+    "prior footage preparation",
+    "model dispatch latency",
+    "new generation",
+    "recording",
+    "transcription",
+    "visual review",
+    "MP4 rendering"
+  ],
+  "pending": [
+    "Fresh-run post-export title edit, source trim, undo and reload acceptance",
+    "Human creative acceptance",
+    "User selection and execution of each of the three prepared versions"
+  ],
+  "external_inputs_required": true,
+  "external_inputs_bundled": false
+}

@@ -99,3 +99,7 @@ The script receives `{ evaluate, mouse, send, sleep, mark }` and drives the page
 
 **Media**
 - Portrait phone video with rotation metadata, HEVC, ProRes (proxy path), variable frame rate, audio-only, still images, a file with no audio track.
+
+## Real editing assignment for review
+
+See [the post-Sazabi sketch-to-demo assignment](EDITING-ASSIGNMENT-SKETCH-TO-DEMO.md) for the public task brief, problem, approach, recorded results and manual acceptance procedure. Its [evidence summary](../test/cases/sketch-to-demo-review.json) records a partial result; this case requires external footage and the local prototype, and is not run by the smoke suite.
