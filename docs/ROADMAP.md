@@ -2,6 +2,43 @@
 
 Version 1.0.0, 12 November 2026. Built and tested on one Mac (macOS, Node 24, ffmpeg 9, Chrome).
 
+## 1.4, continued (14 November 2026)
+
+Added: `blow_away` (the person breaks into particles and leaves the empty set; needs `plate`, a real shot of the empty set from the same locked camera — Frame never invents what is behind the person), `agent_swarm` and the `add_agent_swarm` op, `add_effects_at_words` (effects placed on the word where the speaker names them), cue words per effect, `frame_import prepare` (cutout + transcript start in the background at import and are waited for automatically), `scripts/dryrun-effects-reel.mjs` (times the whole recipe on a take, footage in, MP4 out), and a preview fix: a video still seeking holds its last complete frame instead of flashing black.
+
+**Verified on one Mac:**
+- `node test/smoke.js`: 48 checks pass. The four effect checks that went stale when import started preparing cutouts now import with `prepare: false` so the "needs a cutout" refusal is still tested, and a new check covers the cutout starting at import.
+- The preview hold-frame fix in the 1.4 window: playing a timeline with two cuts and an effect, 680 frames sampled, 0 black frames, every frame within 0.2 s of a cut kept its picture.
+- A real 110 s one-take talking-head recording (1080×1920 HEVC) cut to a 21.3 s reel: 10 effects placed by `add_effects_at_words` from the spoken names, each op with its own agent label, plus `add_agent_swarm` and the call-to-action text, rendered in 25.6 s (-14.9 LUFS).
+
+**Not verified yet:**
+- `blow_away` on real footage with a real plate (the take had no empty-set shot, so it was cut from the reel).
+- `add_effects_at_words` and `add_agent_swarm` driven by a model that only has the tool descriptions.
+
+## 1.4: effect clips and the person cutout (13 November 2026)
+
+**Verified on one Mac (macOS, Node 24, ffmpeg 9, Chrome):**
+- `node test/smoke.js`: 47 checks pass, 10 of them new — an undrawn effect is never composited; `add_effect` rejects unknown effects, out-of-range settings and its own source track; an effect is drawn in headless Chrome and composited; a changed setting is redrawn, never shipped from old frames; an effect needing a cutout says so in `frame_view` and stops `frame_render` before anything is drawn; `frame_cutout` reports measured results on footage with no person (0/30 frames); `frame_effects` names a cutout that does not cover an effect.
+- A real talking-head take (1080×1920, 30 fps): `frame_cutout` on 9 s took 18.9 s with Apple Vision (accurate), person in 270/270 frames, face in 239/270. All nine effects placed through `frame_edit`, checked with `frame_view`, and rendered: 8 s, 375 effect frames, 32 s in all.
+- The window: all nine effects preview live; editing a setting in the inspector goes through `update_clip` and reaches Claude as a manual edit; the Effects panel's + adds an effect at the playhead; playback stays around 36 fps with effects on; no console errors.
+- The rembg fallback helper produced mattes from real footage (6 frames, about 0.5 s a frame after a ~15 s model load).
+
+**Not verified yet:**
+- `frame_cutout` and effects driven by a model that only has the tool descriptions.
+- The rembg fallback end to end through `frame_cutout`, and on Windows or Linux at all.
+- The window's "Cut out person" button (it calls `frame_cutout` exactly like Claude does, but nobody clicked it).
+- Effects on 16:9 or 1:1 projects, on clips with scale/position changes, on sped-up clips, and on an effect spanning a cut on V1.
+- Long cutouts (minutes of footage) and long effect-heavy renders.
+
+**Known weaknesses of 1.4:**
+1. **Effects read one track, not the composite.** An effect sees its source track only (V1 by default); an opaque effect on top hides any effect below it.
+2. **Cutout quality is whatever the engine gives.** Vision is good on people and hair; it can include things the person holds or leans on. The rembg fallback is coarser and slower, and its face detector misses angled faces.
+3. **Preview of cutout effects is approximate while playing** (the matte video can drift a frame or two); paused frames, `frame_view` and the render are exact.
+4. **Effects need Chrome** (or Chromium, Edge, Brave) to render, like captions.
+5. **The catalogue is fixed in code.** A new effect means editing `ui/effects.js`; there is no way yet for Claude to add one at runtime as a reusable pack.
+6. **Text behind and clone row depend on framing.** In a tight close-up the person covers most of the words and the copies leave the frame.
+7. **Effect frames take disk space**: one full-frame image per frame in the project cache, plus the extracted picture and cutout under it. Measured at 1080×1920: 60–430 KB per JPEG frame (opaque effects), 63–73 KB per PNG frame (overlays); the 8 s test with nine effects held about 68 MB of effect frames. Frames of deleted or changed effects are removed.
+
 ## What has actually been verified
 
 - `node test/smoke.js`: 9 checks pass, including from a fresh clone.

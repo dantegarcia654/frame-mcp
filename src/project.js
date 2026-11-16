@@ -2,6 +2,7 @@
 // Claude (via MCP) and the human (via the UI) both go through applyOp, so the timeline has one source of truth.
 import { uid, round, clamp, tc } from './util.js';
 import { findPauses } from './media.js';
+import { EFFECTS, effectParams } from '../ui/effects.js';
 
 export const ASPECTS = { '9:16': [1080, 1920], '16:9': [1920, 1080], '1:1': [1080, 1080], '4:5': [1080, 1350], '4:3': [1440, 1080] };
 const EPS = 0.001;
@@ -22,7 +23,7 @@ export const projectDuration = (p) => p.clips.reduce((m, c) => Math.max(m, end(c
 export const trackClips = (p, t) => p.clips.filter((c) => c.track === t).sort((a, b) => a.start - b.start);
 const trackEnd = (p, t) => trackClips(p, t).reduce((m, c) => Math.max(m, end(c)), 0);
 const getClip = (p, id) => { const c = p.clips.find((c) => c.id === id); if (!c) throw new Error(`No clip "${id}". Current clips: ${p.clips.map((c) => c.id).join(', ') || 'none'}`); return c; };
-const label = (p, c) => c.kind === 'text' ? `"${c.text.content.slice(0, 28)}"` : (c.label || p.assets[c.asset]?.name || c.id);
+const label = (p, c) => c.kind === 'text' ? `"${c.text.content.slice(0, 28)}"` : c.kind === 'effect' ? (c.label || `${EFFECTS[c.effect.type]?.label || c.effect.type} effect`) : (c.label || p.assets[c.asset]?.name || c.id);
 
 function ensureTrack(p, t) {
   if (!/^[VTA]\d+$/.test(t)) throw new Error(`Track "${t}" is not valid. Use V1..Vn (video/images), T1..Tn (text), A1..An (audio).`);
@@ -32,7 +33,7 @@ function ensureTrack(p, t) {
   p.tracks.sort((a, b) => rank(a) - rank(b));
 }
 function checkKindTrack(kind, t) {
-  const want = kind === 'text' ? 'T' : kind === 'audio' ? 'A' : 'V';
+  const want = kind === 'text' ? 'T' : kind === 'audio' ? 'A' : 'V'; // effects are picture layers: V tracks
   if (t[0] !== want) throw new Error(`A ${kind} clip belongs on a ${want} track, not ${t}.`);
 }
 
@@ -40,12 +41,23 @@ const CLIP_PROPS = ['start', 'in', 'out', 'track', 'speed', 'volume', 'muted', '
 const TEXT_DEFAULT = { content: '', size: 0.055, color: '#ffffff', stroke: '#000000', strokeWidth: 0.14, bg: null, weight: 800, x: 0.5, y: 0.72, maxWidth: 0.84, uppercase: false, font: 'Helvetica Neue, Helvetica, Arial, sans-serif' };
 const TEXT_KEYS = Object.keys(TEXT_DEFAULT);
 // Everything update_clip can change. Anything else is rejected instead of silently ignored, so a "✓" always means it happened.
-const UPDATE_KEYS = [...CLIP_PROPS, 'duration', 'grade', 'key', 'text', 'style'];
+const UPDATE_KEYS = [...CLIP_PROPS, 'duration', 'grade', 'key', 'text', 'style', 'params', 'source'];
 const OP_META = ['op', 'id', 'why', 'agent', 'ripple'];
 
 function setProps(p, c, a) {
   for (const k of CLIP_PROPS) if (a[k] !== undefined && a[k] !== null) c[k] = a[k];
-  if (a.duration != null && (c.kind === 'text' || c.kind === 'image')) { c.in = 0; c.out = Number(a.duration); }
+  if (a.duration != null && (c.kind === 'text' || c.kind === 'image' || c.kind === 'effect')) { c.in = 0; c.out = Number(a.duration); }
+  if (c.kind === 'effect') {
+    if (a.params) c.effect.params = effectParams(c.effect.type, a.params, c.effect.params);
+    if (EFFECTS[c.effect.type].params.plate) { // an effect that reveals the set behind the person needs a real shot of it
+      const id = c.effect.params.plate, pl = p.assets[id];
+      if (!id) throw new Error(`${c.effect.type} needs params.plate: the asset id of a shot of the empty set from the same locked camera angle (film about 3 s with nobody in frame and import it). Frame never invents the background behind the person. Nothing was changed.`);
+      if (!pl || !['image', 'video'].includes(pl.kind)) throw new Error(`${c.effect.type}.plate "${id}" is not an image or video asset in this project. Assets: ${Object.keys(p.assets).join(', ') || 'none'}. Nothing was changed.`);
+    }
+    if (a.source) c.source = a.source;
+    if (!/^V\d+$/.test(c.source)) throw new Error(`An effect reads a video track (V1, V2…), not "${c.source}".`);
+    if (c.source === (a.track || c.track)) throw new Error(`An effect cannot sit on the track it reads (${c.source}). Put it on a track above, e.g. V${Number(c.source.slice(1)) + 1}.`);
+  }
   if (a.grade !== undefined) c.grade = a.grade ? { ...(c.grade || {}), ...a.grade } : undefined;
   if (a.key !== undefined) c.key = a.key ? { color: '#00ff00', similarity: 0.3, blend: 0.08, ...(c.key || {}), ...a.key } : undefined;
   if (c.kind === 'text') {
@@ -64,7 +76,7 @@ function setProps(p, c, a) {
 }
 
 /** Magnetic timeline: clips on the base track (V1) stay packed, trims ripple, nothing leaves a hole. set_project {magnetic:false} turns it off. */
-const isMag = (p, c) => p.magnetic !== false && c.kind !== 'text' && (p.magneticTracks || ['V1']).includes(c.track);
+const isMag = (p, c) => p.magnetic !== false && c.kind !== 'text' && c.kind !== 'effect' && (p.magneticTracks || ['V1']).includes(c.track);
 function repack(p, track) { let t = 0; for (const c of trackClips(p, track)) { c.start = round(t); t += dur(c); } }
 function rippleAfter(p, c, edge, delta) {
   if (Math.abs(delta) < EPS) return;
@@ -112,6 +124,37 @@ function cutRange(p, from, to, tracks, ripple) {
   }
   if (ripple) for (const m of p.markers) if (m.t >= to) m.t = round(m.t - (to - from));
   return touched;
+}
+
+// ───────────────────────── cue words: say an effect's name and the effect starts there
+const norm = (w) => String(w).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+const stem = (t) => (t.length > 3 && t.endsWith('s') ? t.slice(0, -1) : t);
+function lev(a, b) { if (Math.abs(a.length - b.length) > 1) return 2; const d = Array.from({ length: a.length + 1 }, (_, i) => [i]); for (let j = 1; j <= b.length; j++) d[0][j] = j; for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); return d[a.length][b.length]; }
+/** Whisper spells words its own way ("Rackfocus", "clone rows"): match on stems, allowing one typo in words of 4+ letters. */
+const sameWord = (a, b) => a === b || stem(a) === stem(b) || (a.length >= 4 && b.length >= 4 && lev(stem(a), stem(b)) <= 1);
+/**
+ * Find cue phrases in the words of a track. cues: [{say, effect, params?}]. Returns accepted matches in time order:
+ * longer phrases win over shorter ones at the same place, and each effect is taken once (its first mention) unless repeat.
+ */
+export function findCues(words, cues, { repeat = false } = {}) {
+  const toks = []; for (const w of words) for (const t of norm(w.text)) toks.push({ t, start: w.start, end: w.end });
+  // Whisper sometimes glues two words into one ("rackfocus"): also try each pair of tokens joined.
+  const hits = [];
+  for (const cue of cues) {
+    const ph = norm(cue.say); if (!ph.length) continue;
+    for (let i = 0; i < toks.length; i++) {
+      if (ph.every((p, k) => toks[i + k] && sameWord(toks[i + k].t, p))) hits.push({ ...cue, i, n: ph.length, start: toks[i].start, end: toks[i + ph.length - 1].end, heard: toks.slice(i, i + ph.length).map((x) => x.t).join(' ') });
+      else if (ph.length === 2 && sameWord(toks[i].t, ph.join(''))) hits.push({ ...cue, i, n: 1, start: toks[i].start, end: toks[i].end, heard: toks[i].t });
+    }
+  }
+  hits.sort((a, b) => a.start - b.start || b.n - a.n);
+  const used = new Set(), seen = new Set(), out = [];
+  for (const h of hits) {
+    if ([...Array(h.n).keys()].some((k) => used.has(h.i + k))) continue;
+    if (!repeat && seen.has(h.effect)) continue;
+    for (let k = 0; k < h.n; k++) used.add(h.i + k); seen.add(h.effect); out.push(h);
+  }
+  return { matches: out, tokens: toks, used };
 }
 
 /** Map transcript words through the cuts on a track, so captions follow the edit. */
@@ -173,6 +216,75 @@ export function applyOp(p, a, ctx = {}) {
       p.clips.push(c);
       return { text: `Text ${label(p, c)} on ${c.track} at ${tc(c.start)} for ${round(dur(c), 2)}s`, clipIds: [c.id], t: c.start };
     }
+    case 'add_effect': {
+      const type = a.effect || a.type;
+      if (!EFFECTS[type]) throw new Error(`add_effect needs effect: one of ${Object.keys(EFFECTS).join(', ')}. frame_effects lists what each does and its settings.`);
+      if (a.start == null) throw new Error('add_effect needs start (timeline seconds).');
+      const fps = p.fps || 30, snap = (t) => Math.round(Number(t) * fps) / fps; // effects sit on whole frames, so every frame of the effect lines up with a frame of the footage
+      const track = a.track || 'V2'; ensureTrack(p, track);
+      const c = { id: uid('c_'), kind: 'effect', track, start: 0, in: 0, out: 1.5, speed: 1, opacity: 1, source: a.source || 'V1', effect: { type, params: effectParams(type, a.params) } };
+      setProps(p, c, { ...a, start: snap(a.start), duration: Math.max(1 / fps, snap(a.duration ?? 1.5)), track, params: undefined, source: undefined });
+      p.clips.push(c);
+      const needs = EFFECTS[type].needs === 'cutout' ? ' · needs a cutout of the footage under it' : '';
+      return { text: `Effect ${label(p, c)} on ${c.track} at ${tc(c.start)} for ${round(dur(c), 2)}s, reading ${c.source}${needs}`, clipIds: [c.id], t: c.start };
+    }
+    case 'add_effects_at_words': {
+      // The recipe for an effects reel: the person names each effect as it happens; each name starts that effect.
+      const src = a.source_track || a.source || 'V1', words = timelineWords(p, src);
+      if (!words.length) throw new Error(`No transcript on the clips of ${src}. Run frame_transcribe on the footage first (it starts by itself at import).`);
+      const only = a.only ? new Set(a.only) : null;
+      for (const id of only || []) if (!EFFECTS[id]) throw new Error(`No effect "${id}". Effects: ${Object.keys(EFFECTS).join(', ')}.`);
+      const cues = a.cues || Object.entries(EFFECTS).filter(([id]) => !only || only.has(id)).flatMap(([id, fx]) => (fx.say || []).map((say) => ({ say, effect: id })));
+      const { matches, tokens, used } = findCues(words, cues, { repeat: a.repeat });
+      // Stop words (e.g. the first word of the call to action) end the effect before them, unless they are part of a cue.
+      const stops = (a.stop || []).flatMap((w) => norm(w)).filter(Boolean);
+      const stopTimes = tokens.filter((x, i) => !used.has(i) && stops.some((s) => sameWord(x.t, s))).map((x) => x.start);
+      const fps = p.fps || 30, max = Number(a.max ?? 3), min = Number(a.min ?? 0.6), lead = Number(a.lead ?? 0), trackEndT = trackEnd(p, src);
+      const placed = [], failed = [], ids = [];
+      matches.forEach((m, k) => {
+        const start = Math.max(0, m.start - lead), next = Math.min(matches[k + 1]?.start ?? trackEndT, ...stopTimes.filter((t) => t > m.start + 0.05));
+        const duration = Math.max(min, Math.min(max, next - start, trackEndT - start));
+        try {
+          const r = applyOp(p, { op: 'add_effect', effect: m.effect, start, duration, track: a.track, source: src, params: { ...(a.params?.[m.effect] || {}), ...(m.params || {}) } }, ctx);
+          ids.push(...r.clipIds); placed.push(`${m.effect} at ${tc(start)} for ${round(duration, 2)}s (heard "${m.heard}")`);
+        } catch (e) { failed.push(`${m.effect} (heard "${m.heard}" at ${tc(m.start)}): ${e.message}`); }
+      });
+      const missing = [...new Set(cues.map((c) => c.effect))].filter((e) => !matches.some((m) => m.effect === e));
+      return { text: `Effects from the words on ${src}: placed ${placed.length}${placed.length ? ' — ' + placed.join('; ') : ''}${failed.length ? `. NOT placed: ${failed.join('; ')}` : ''}${missing.length ? `. Not said (no cue heard): ${missing.join(', ')}` : ''}`, clipIds: ids, t: matches[0]?.start ?? null };
+    }
+    case 'add_agent_swarm': {
+      // The agents that made the edit, drawn over the video. Who placed which effect comes from the edit history (the
+      // feed: every op records its agent and the clips it made), so each tag on screen stands for a real edit.
+      const src = a.source_track || a.source || 'V1', track = a.track || 'V3';
+      // The op that created each clip (its first entry in the feed) and any later edits to it.
+      const by = new Map(), entry = new Map(), later = new Map();
+      for (const e of p.feed || []) if (e.kind === 'op') for (const id of e.clipIds || []) {
+        if (!entry.has(id)) { entry.set(id, e); if (e.agent) by.set(id, String(e.agent)); } else (later.get(id) || later.set(id, []).get(id)).push(e);
+      }
+      const fxClips = p.clips.filter((c) => c.kind === 'effect' && c.effect?.type !== 'agent_swarm' && (c.source || 'V1') === src).sort((x, y) => x.start - y.start);
+      if (!fxClips.length) throw new Error(`No effect clips read ${src}, so there are no agents to show. Place effects first (add_effects_at_words or add_effect), giving each op an agent label.`);
+      const endT = trackEnd(p, src); if (!(endT > 0)) throw new Error(`${src} is empty.`);
+      p.clips = p.clips.filter((c) => !(c.kind === 'effect' && c.effect?.type === 'agent_swarm')); // one swarm, rebuilt from the current edit
+      // Each agent's log: the steps Frame actually recorded for the clip it made, in the order they happened.
+      const fps = p.fps || 30, two = (n) => String(n).padStart(2, '0');
+      const clock = (ms) => { const d = new Date(ms); return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0').slice(0, 2)}`; };
+      const jobs = fxClips.map((c) => {
+        const e = entry.get(c.id), fx = EFFECTS[c.effect.type], log = [];
+        const heard = e?.text?.match(new RegExp(`${c.effect.type} at \\S+ for [\\d.]+s \\(heard "([^"]+)"\\)`))?.[1];
+        if (heard) log.push({ k: 'heard', s: `heard "${heard}"` });
+        log.push({ k: 'placed', s: `placed ${c.effect.type} ${round(dur(c), 2)}s` });
+        if (fx.needs === 'cutout' || fx.uses === 'cutout') {
+          const v1 = p.clips.find((x) => x.track === src && x.kind !== 'effect' && x.start <= c.start + 1e-6 && end(x) > c.start), cut = v1 && p.assets[v1.asset]?.cutout;
+          if (cut) log.push({ k: fx.matte === false ? 'face' : 'matte', s: `reads ${cut.engine === 'vision' ? 'Apple Vision' : cut.engine} ${fx.matte === false ? 'face box' : 'cutout'}` });
+        }
+        log.push({ k: 'frames', s: `${Math.round(dur(c) * fps)} frames` });
+        for (const x of later.get(c.id) || []) if (x.op === 'update_clip') { const what = String(x.text || '').split(' · ').slice(1).join(' · ').replace(/\s*\[.*$/, ''); if (what) log.push({ k: 'edit', s: `edited ${what}`.slice(0, 40) }); }
+        return { agent: by.get(c.id) || 'Claude', effect: c.effect.type, start: round(c.start, 3), end: round(end(c), 3), params: c.effect.params, op: e?.op || '', clock: e?.ts ? clock(e.ts) : '', log };
+      });
+      const r = applyOp(p, { op: 'add_effect', effect: 'agent_swarm', start: 0, duration: endT, track, source: src, params: { ...(a.params || {}), jobs } }, ctx);
+      const unnamed = fxClips.filter((c) => !by.has(c.id)).length, names = [...new Set(jobs.map((j) => j.agent))];
+      return { text: `Agent swarm on ${track} for ${round(endT, 2)}s: ${names.length} agent(s) from the edit history — ${jobs.map((j) => `${j.agent} → ${j.effect} at ${tc(j.start)}`).join('; ')}${unnamed ? `. ${unnamed} effect(s) had no agent in the history and show as "Claude"` : ''}. Rebuild it with add_agent_swarm after changing the effects.`, clipIds: r.clipIds, t: 0 };
+    }
     case 'add_captions': {
       const track = a.track || 'T1'; ensureTrack(p, track);
       let phrases = a.phrases;
@@ -195,9 +307,10 @@ export function applyOp(p, a, ctx = {}) {
       const c = getClip(p, a.id);
       const unknown = Object.keys(a).filter((k) => !UPDATE_KEYS.includes(k) && !OP_META.includes(k));
       if (unknown.length) throw new Error(`update_clip does not change ${unknown.map((k) => `"${k}"`).join(', ')}${unknown.includes('asset') ? ' — to put different footage in this slot use replace_source {id, asset, in}' : ''}. It changes: ${UPDATE_KEYS.join(', ')}. Nothing was changed.`);
+      if ((a.params || a.source) && c.kind !== 'effect') throw new Error(`${label(p, c)} is a ${c.kind} clip; params and source only apply to effect clips. Nothing was changed.`);
       if ((a.text != null || a.style) && c.kind !== 'text') throw new Error(`${label(p, c)} is a ${c.kind} clip; text and style only apply to text clips. Nothing was changed.`);
       if (a.style) { const bad = Object.keys(a.style).filter((k) => !TEXT_KEYS.includes(k) || k === 'content'); if (bad.length) throw new Error(`Unknown text style ${bad.map((k) => `"${k}"`).join(', ')}. Text style keys: ${TEXT_KEYS.filter((k) => k !== 'content').join(', ')}. Nothing was changed.`); }
-      if (a.duration != null && !['text', 'image'].includes(c.kind)) throw new Error(`duration applies to text and image clips; for ${c.kind} change in/out or use trim_clip. Nothing was changed.`);
+      if (a.duration != null && !['text', 'image', 'effect'].includes(c.kind)) throw new Error(`duration applies to text, image and effect clips; for ${c.kind} change in/out or use trim_clip. Nothing was changed.`);
       const before = { start: c.start, in: c.in, out: c.out, track: c.track, dur: dur(c) };
       const backup = JSON.stringify(c);
       try { if (a.track && a.track !== c.track) { ensureTrack(p, a.track); checkKindTrack(c.kind, a.track); } setProps(p, c, a); }
@@ -205,7 +318,7 @@ export function applyOp(p, a, ctx = {}) {
       const parts = [];
       // Ripple when the clip is on, or has just left, a magnetic track. Only magnetic tracks are repacked: moving a clip
       // from V1 to V2 must close the hole on V1 without packing the free-form V2.
-      const magTrack = (t) => p.magnetic !== false && c.kind !== 'text' && (p.magneticTracks || ['V1']).includes(t);
+      const magTrack = (t) => p.magnetic !== false && c.kind !== 'text' && c.kind !== 'effect' && (p.magneticTracks || ['V1']).includes(t);
       if (a.ripple !== false && (magTrack(c.track) || magTrack(before.track))) {
         const delta = round(dur(c) - before.dur);
         if (c.track === before.track && Math.abs(delta) >= EPS) { // trim / extend / speed change: the left edge stays, everything after follows
@@ -226,6 +339,10 @@ export function applyOp(p, a, ctx = {}) {
       for (const k of ['speed', 'volume', 'muted', 'fit', 'scale', 'x', 'y', 'opacity', 'fadeIn', 'fadeOut', 'label']) if (show(was[k]) !== show(c[k])) parts.push(`${k} ${show(was[k])} → ${show(c[k])}`);
       if (show(was.grade) !== show(c.grade)) parts.push(c.grade ? `grade ${Object.entries(c.grade).map(([k, v]) => `${k} ${v}`).join(', ')}` : 'grade removed');
       if (show(was.key) !== show(c.key)) parts.push(c.key ? `keyed out ${c.key.color} (similarity ${c.key.similarity}, blend ${c.key.blend})` : 'key removed');
+      if (c.kind === 'effect') {
+        for (const k of Object.keys(c.effect.params)) if (show(was.effect.params[k]) !== show(c.effect.params[k])) parts.push(`${k} ${show(was.effect.params[k])} → ${show(c.effect.params[k])}`);
+        if (was.source !== c.source) parts.push(`reads ${was.source} → ${c.source}`);
+      }
       if (c.kind === 'text') {
         if (was.text.content !== c.text.content) parts.push(`text "${was.text.content.slice(0, 24)}" → "${c.text.content.slice(0, 24)}"`);
         for (const k of TEXT_KEYS) if (k !== 'content' && show(was.text[k]) !== show(c.text[k])) parts.push(`${k} ${show(was.text[k])} → ${show(c.text[k])}`);
@@ -235,7 +352,7 @@ export function applyOp(p, a, ctx = {}) {
     case 'replace_source': {
       // Put different footage in a clip's slot: start, duration, track and effects stay; only the source changes.
       const c = getClip(p, a.id);
-      if (c.kind === 'text') throw new Error('replace_source works on footage clips, not text.');
+      if (c.kind === 'text' || c.kind === 'effect') throw new Error(`replace_source works on footage clips, not ${c.kind}.`);
       const asset = p.assets[a.asset]; if (!asset) throw new Error(`No asset "${a.asset}". Assets: ${Object.keys(p.assets).join(', ') || 'none'}`);
       const kindOk = c.kind === 'audio' ? asset.kind === 'audio' || asset.hasAudio : ['video', 'image'].includes(asset.kind);
       if (!kindOk) throw new Error(`${asset.name} is ${asset.kind}; a ${c.kind} clip needs ${c.kind === 'audio' ? 'audio' : 'video or an image'}. Nothing was changed.`);
@@ -253,7 +370,7 @@ export function applyOp(p, a, ctx = {}) {
     case 'slip_clip': {
       // Slip: the clip keeps its place and its length on the timeline; a different moment of the recording plays inside it.
       const c = getClip(p, a.id);
-      if (c.kind === 'text' || c.kind === 'image') throw new Error(`slip_clip works on video and audio clips; ${label(p, c)} is ${c.kind}. Nothing was changed.`);
+      if (c.kind === 'text' || c.kind === 'image' || c.kind === 'effect') throw new Error(`slip_clip works on video and audio clips; ${label(p, c)} is ${c.kind}. Nothing was changed.`);
       if (a.by == null && a.in == null) throw new Error('slip_clip needs by (source seconds; + plays a later moment) or in (the new source in-point).');
       const asset = p.assets[c.asset], len = round(c.out - c.in), want = a.in != null ? Number(a.in) : c.in + Number(a.by);
       if (!Number.isFinite(want)) throw new Error('by and in must be numbers.');
@@ -264,7 +381,7 @@ export function applyOp(p, a, ctx = {}) {
       return { text: `${label(p, c)} · slipped ${to - was.in > 0 ? '+' : ''}${round(to - was.in)}s${stopped} · source ${tc(was.in)}–${tc(was.out)} → ${tc(c.in)}–${tc(c.out)} · start ${tc(c.start)} and length ${round(dur(c), 3)}s unchanged`, clipIds: [c.id], t: c.start };
     }
     case 'trim_clip': case 'extend_clip': {
-      const c = getClip(p, a.id); if (c.kind === 'text') throw new Error(`${op} works on footage clips; use update_clip with duration for text.`);
+      const c = getClip(p, a.id); if (c.kind === 'text' || c.kind === 'effect') throw new Error(`${op} works on footage clips; use update_clip with duration for ${c.kind} clips.`);
       const asset = p.assets[c.asset], edge = a.edge || 'end';
       if (!['start', 'end'].includes(edge)) throw new Error('edge must be "start" or "end".');
       const sp = c.speed || 1, ext = op === 'extend_clip';
@@ -363,7 +480,7 @@ export function applyOp(p, a, ctx = {}) {
       return { text: `Project: ${p.name} · ${p.width}×${p.height} · ${p.fps} fps`, clipIds: [], t: null };
     }
     default:
-      throw new Error(`Unknown op "${op}". Ops: add_clip, keep_ranges, replace_source, trim_clip, extend_clip, add_text, add_captions, style_text, update_clip, split_clip, delete_clip, cut_range, remove_silences, close_gaps, clear_track, add_marker, delete_marker, set_project.`);
+      throw new Error(`Unknown op "${op}". Ops: add_clip, keep_ranges, replace_source, trim_clip, extend_clip, add_text, add_effect, add_effects_at_words, add_agent_swarm, add_captions, style_text, update_clip, split_clip, delete_clip, cut_range, remove_silences, close_gaps, clear_track, add_marker, delete_marker, set_project.`);
   }
 }
 
@@ -387,12 +504,13 @@ export function describe(p) {
   const lines = [`Project "${p.name}" (${p.id}) · ${p.width}×${p.height} @ ${p.fps} fps · duration ${round(projectDuration(p), 2)}s · version ${p.version}`];
   const assets = Object.values(p.assets);
   lines.push(assets.length ? 'Assets:' : 'Assets: none yet');
-  for (const a of assets) lines.push(`  ${a.id} · ${a.kind} · ${a.name}${a.duration ? ` · ${a.duration}s` : ''}${a.width ? ` · ${a.width}×${a.height}` : ''}${a.transcript ? ' · transcript ✓' : ''}${a.loudness ? ` · ${a.loudness.lufs} LUFS` : ''}`);
+  for (const a of assets) lines.push(`  ${a.id} · ${a.kind} · ${a.name}${a.duration ? ` · ${a.duration}s` : ''}${a.width ? ` · ${a.width}×${a.height}` : ''}${a.transcript ? ' · transcript ✓' : ''}${a.cutout ? ` · cutout ✓ (source ${a.cutout.from}–${a.cutout.to}s)` : ''}${a.loudness ? ` · ${a.loudness.lufs} LUFS` : ''}`);
   for (const t of p.tracks) {
     const cs = trackClips(p, t); if (!cs.length) continue;
     lines.push(`${t}:`);
     for (const c of cs) {
       const fx = [c.speed !== 1 && `speed ${c.speed}`, c.volume !== 1 && c.volume != null && `vol ${c.volume}`, c.muted && 'muted', c.scale && c.scale !== 1 && `scale ${c.scale}`, (c.x || c.y) && `pos ${c.x},${c.y}`, c.fit === 'contain' && 'contain', c.opacity != null && c.opacity !== 1 && `opacity ${c.opacity}`, c.fadeIn && `fadeIn ${c.fadeIn}`, c.fadeOut && `fadeOut ${c.fadeOut}`, c.grade && `grade ${JSON.stringify(c.grade)}`, c.key && `key ${c.key.color}`].filter(Boolean).join(' · ');
+      if (c.kind === 'effect') { lines.push(`  ${c.id} · ${round(c.start, 2)}–${round(end(c), 2)}s · effect ${c.effect.type} reading ${c.source} · ${JSON.stringify(c.effect.params)}${c.opacity != null && c.opacity !== 1 ? ` · opacity ${c.opacity}` : ''}${c.fadeIn ? ` · fadeIn ${c.fadeIn}` : ''}${c.fadeOut ? ` · fadeOut ${c.fadeOut}` : ''}`); continue; }
       lines.push(c.kind === 'text'
         ? `  ${c.id} · ${round(c.start, 2)}–${round(end(c), 2)}s · "${c.text.content}"`
         : `  ${c.id} · ${round(c.start, 2)}–${round(end(c), 2)}s · ${c.asset} src ${c.in}–${c.out}${p.assets[c.asset]?.duration && c.kind !== 'image' ? ` (footage left: ${round(c.in, 1)}s before, ${round(p.assets[c.asset].duration - c.out, 1)}s after)` : ''}${c.label ? ` · ${c.label}` : ''}${fx ? ` · ${fx}` : ''}`);

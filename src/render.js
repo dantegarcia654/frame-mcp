@@ -1,5 +1,6 @@
 // Turns the timeline into one ffmpeg command. The same graph renders the final MP4 and the still frames Claude looks at.
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { round } from './util.js';
 import { dur, end, projectDuration } from './project.js';
 import { textKey } from '../ui/text-draw.js';
@@ -27,12 +28,19 @@ function gradeFilters(g) {
   return out;
 }
 
+/** Which drawn frame of an effect clip shows at timeline second t. Effects start on a frame boundary (add_effect snaps them). */
+export const fxFrames = (c, fps) => Math.max(1, Math.round(((c.out - c.in) / (c.speed || 1)) * fps));
+export const fxIndex = (c, t, fps) => Math.min(fxFrames(c, fps) - 1, Math.max(0, Math.round((t - c.start) * fps)));
+export const fxFile = (i, ext) => `${String(i).padStart(5, '0')}.${ext}`;
+
 /**
  * @param p project
  * @param o.window [t0,t1] timeline seconds (default whole project)
  * @param o.still  render one frame at window[0]
  * @param o.rasters { clipId: {file,x,y,hash} } drawn captions (ui/text-draw.js, by the window or headless Chrome); stale ones are skipped
  * @param o.assetPath (asset) => absolute path
+ * @param o.effects { clipId: {dir, ext} } drawn effect frames (src/effects.js, by headless Chrome running ui/effects.js); undrawn ones are skipped
+ * @param o.noAudio  build the picture only (used to extract what sits under an effect)
  */
 export function buildGraph(p, o) {
   const total = projectDuration(p);
@@ -52,7 +60,14 @@ export function buildGraph(p, o) {
     let idx, chain = [], X, Y;
     let opacity = c.opacity ?? 1;
     if (o.still) opacity *= fadeFactor(c, t0);
-    if (c.kind === 'text') {
+    if (c.kind === 'effect') {
+      const fx = o.effects?.[c.id];
+      if (!fx) { warnings.push(`Effect ${c.effect.type} (${c.id}) has not been drawn for this frame range, so it is not in this output.`); continue; }
+      const first = fxIndex(c, cs, FPS);
+      if (o.still) idx = addInput(['-loop', '1', '-framerate', String(FPS), '-t', f(1 / FPS), '-i', path.join(fx.dir, fxFile(first, fx.ext))]);
+      else idx = addInput(['-framerate', String(FPS), '-start_number', String(first), '-t', f(Math.max(le - ls, 1 / FPS)), '-i', path.join(fx.dir, `%05d.${fx.ext}`)]);
+      chain.push('format=rgba'); X = 0; Y = 0; // effect frames are drawn full-frame at the project size
+    } else if (c.kind === 'text') {
       const r = o.rasters?.[c.id];
       if (!r) { warnings.push(`Text "${c.text.content.slice(0, 24)}" (${c.id}) has not been drawn, so it is not in this output.`); continue; }
       // Never composite a caption drawn from older text or style: that is how a restyle "succeeds" and the old look ships.
@@ -68,7 +83,7 @@ export function buildGraph(p, o) {
       else {
         idx = addInput(['-ss', f(srcIn), '-t', f(Math.max(srcDur, 1 / FPS)), '-i', file]);
         chain.push(`setpts=(PTS-STARTPTS)/${f(c.speed)}`, `fps=${FPS}`);
-        if (a.hasAudio && !c.muted && (c.volume ?? 1) > 0 && !o.still) audio.push({ c, idx, ls, le });
+        if (a.hasAudio && !c.muted && (c.volume ?? 1) > 0 && !o.still && !o.noAudio) audio.push({ c, idx, ls, le });
       }
       chain.push(`scale=${sw}:${sh}`, 'setsar=1');
       const g = c.grade ? gradeFilters(c.grade) : [];
@@ -89,7 +104,7 @@ export function buildGraph(p, o) {
     last = `v${n}`; n++;
   }
 
-  if (!o.still) {
+  if (!o.still && !o.noAudio) {
     for (const c of p.clips.filter((c) => c.kind === 'audio' && end(c) > t0 && c.start < t1 && !c.muted && (c.volume ?? 1) > 0)) {
       const cs = Math.max(c.start, t0), ce = Math.min(end(c), t1);
       const idx = addInput(['-ss', f(c.in + (cs - c.start) * c.speed), '-t', f((ce - cs) * c.speed), '-i', o.assetPath(p.assets[c.asset])]);
@@ -107,7 +122,7 @@ export function buildGraph(p, o) {
     filters.push(`[${idx}:a]${ch.join(',')}[a${i}]`); outs.push(`[a${i}]`);
   });
   let aLabel = null;
-  if (!o.still) {
+  if (!o.still && !o.noAudio) {
     const tail = `apad,atrim=0:${f(D)}${o.loudnorm ? ',loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.84:level=disabled,aresample=48000' : ''}[aout]`;
     if (!outs.length) filters.push(`anullsrc=r=48000:cl=stereo,atrim=0:${f(D)}[aout]`);
     else if (outs.length === 1) filters.push(`${outs[0]}${tail}`);

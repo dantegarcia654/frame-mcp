@@ -9,7 +9,10 @@ import { VERSION, PORT, HOME, BASE, sleep, uid, round, mkdirp, run, tc } from '.
 import * as media from './media.js';
 import * as packs from './packs.js';
 import { newProject, applyOp, describe, projectDuration, timelineWords, end, timelineIssues } from './project.js';
-import { buildGraph, ffmpegArgs, runFfmpeg } from './render.js';
+import { buildGraph, ffmpegArgs, runFfmpeg, fxIndex, fxFrames } from './render.js';
+import { makeCutout, cutoutEngine } from './cutout.js';
+import { ensureEffects, handleJobRequest, effectProblem, sourceClips } from './effects.js';
+import { EFFECTS, describeEffects } from '../ui/effects.js';
 import { TOOLS, INSTRUCTIONS } from './tools.js';
 import { drawTextsHeadless } from './text.js';
 import { textKey } from '../ui/text-draw.js';
@@ -61,6 +64,30 @@ function current(id) {
 }
 const assetPath = (p) => (a) => a.path;
 const loadEnv = (p) => (assetId) => { const f = cacheFile(p, `${assetId}.env.json`); return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null; };
+const matteFile = (p) => (a) => cacheFile(p, `${a.id}.matte.mp4`);
+const tracks = new Map(); // cutout tracks, read once per cutout version
+const trackOf = (p) => (a) => { const k = `${p.id}/${a.id}/${a.cutout?.version}`; if (!tracks.has(k)) tracks.set(k, JSON.parse(fs.readFileSync(cacheFile(p, `${a.id}.track.json`), 'utf8'))); return tracks.get(k); };
+
+/**
+ * Draw the effect frames needed for the timeline window [t0, t1] (or the single frames at `times`).
+ * Returns { drawn, problems } for buildGraph's o.effects; an effect that cannot be drawn is reported, never shipped stale.
+ */
+async function drawEffects(p, { window: win, times } = {}) {
+  const want = [];
+  for (const c of p.clips.filter((x) => x.kind === 'effect')) {
+    let idx = [];
+    if (times) idx = [...new Set(times.filter((t) => t >= c.start - 1e-4 && t < end(c) - 1e-4).map((t) => fxIndex(c, t, p.fps)))];
+    else { const [t0, t1] = win; if (end(c) <= t0 || c.start >= t1) continue; const a = fxIndex(c, Math.max(t0, c.start), p.fps), b = fxIndex(c, Math.min(t1, end(c)) - 1e-6, p.fps); for (let i = a; i <= b; i++) idx.push(i); }
+    if (idx.length) want.push({ clip: c, indices: idx });
+  }
+  if (!want.length) return { drawn: {}, problems: [] };
+  const total = want.reduce((n, w) => n + w.indices.length, 0);
+  const prev = p.status; p.status = { state: 'active', label: `Drawing ${total} effect frame${total === 1 ? '' : 's'}` }; emit(p);
+  let last = 0;
+  try {
+    return await ensureEffects(p, want, { cacheDir: () => path.dirname(cacheFile(p, 'x')), matteFile: matteFile(p), trackOf: trackOf(p), onProgress: (n, of) => { if (Date.now() - last > 400) { last = Date.now(); p.status = { state: 'active', label: `Drawing effect frames ${n}/${of}` }; emit(p); } } });
+  } finally { p.status = prev; save(p); }
+}
 
 // ───────────────────────── live updates
 function publicProject(p) {
@@ -161,14 +188,83 @@ async function importOne(p, file, opts) {
       a.hasEnv = true; a.loudness = await media.loudness(file);
     }
     if (opts.scenes && a.kind === 'video') { a.busy = 'finding scene changes'; emit(p); a.scenes = await media.sceneCuts(file); }
-    if (a.needsProxy) { a.busy = 'making preview proxy'; emit(p); await media.makeProxy(file, cacheFile(p, `${a.id}.proxy.mp4`)); a.proxy = true; }
+    // Big footage the browser can already play gets its light preview copy in the background (it only smooths playback);
+    // footage the browser cannot play at all needs the copy before it can be previewed, so that one is waited for.
+    const playable = ['h264', 'hevc', 'vp9', 'av1'].includes(a.vcodec) && !/\.(mkv|avi|mts|mxf)$/i.test(file);
+    if (a.needsProxy && playable) setImmediate(() => ensureProxies(p));
+    else if (a.needsProxy) { a.busy = 'making preview proxy'; emit(p); await media.makeProxy(file, cacheFile(p, `${a.id}.proxy.mp4`)); a.proxy = true; }
   } finally { delete a.busy; emit(p); }
   return a;
 }
 
-async function renderStill(p, t, maxDim = 720) {
+// ───────────────────────── background preparation
+// The person cutout and the transcript start right after import and run alongside everything else, so by the time
+// effects or captions are placed they are usually done. Every tool that needs one waits for it instead of starting
+// it again. Each is a visible process step with the exact command.
+const pending = new Map(); // `${project}/${asset}/cutout|transcript` -> Promise
+const pendingOf = (p, as, kind) => pending.get(`${p.id}/${as.id}/${kind}`);
+function track(p, as, kind, job) {
+  const key = `${p.id}/${as.id}/${kind}`; pending.set(key, job);
+  job.then(() => {}, () => {}).finally(() => { if (pending.get(key) === job) pending.delete(key); });
+  return job;
+}
+function cutoutRange(p, as, a = {}) {
+  const used = p.clips.filter((c) => c.asset === as.id && c.kind === 'video');
+  let from = a.from != null ? Number(a.from) : used.length ? Math.min(...used.map((c) => c.in)) - 0.5 : 0;
+  let to = a.to != null ? Number(a.to) : used.length ? Math.max(...used.map((c) => c.out)) + 0.5 : as.duration;
+  return { from: Math.max(0, round(from, 3)), to: Math.min(as.duration, round(to, 3)) };
+}
+function startCutout(p, as, { from, to, quality = 'balanced', why, auto }) {
+  return track(p, as, 'cutout', (async () => {
+    const eng = await cutoutEngine();
+    if (!eng.id) throw new Error(`Frame cannot cut out a person on this machine: ${eng.reason}.`);
+    const step = { id: uid('s_'), startedAt: Date.now(), title: `Cutout: person in ${as.name} (source ${tc(from)}–${tc(to)})${auto ? ' — started at import' : ''}`, tool: eng.label, status: 'running', note: 'Runs on this machine, in parallel chunks. White in the matte = person. Every frame is segmented; nothing is uploaded.' };
+    p.steps.push(step); feed(p, { kind: 'step', text: `Started: ${step.title}`, stepId: step.id, why });
+    as.cutting = '0%'; emit(p);
+    let r, last = 0;
+    try {
+      r = await makeCutout(as, { from, to, quality, matteOut: matteFile(p)(as) + '.new.mp4', trackOut: cacheFile(p, `${as.id}.track.new.json`), onProgress: (k) => { as.cutting = `${Math.round(k * 100)}%`; if (Date.now() - last > 500) { last = Date.now(); emit(p); } } });
+    } catch (e) {
+      delete as.cutting; step.status = 'failed'; step.endedAt = Date.now(); feed(p, { kind: 'step', text: `Failed: ${step.title}`, why: String(e.message).slice(-300), stepId: step.id }); emit(p);
+      throw e;
+    }
+    fs.renameSync(matteFile(p)(as) + '.new.mp4', matteFile(p)(as)); fs.renameSync(cacheFile(p, `${as.id}.track.new.json`), cacheFile(p, `${as.id}.track.json`));
+    const { command, ...meta } = r; as.cutout = meta; delete as.cutting;
+    Object.assign(step, { status: 'done', endedAt: Date.now(), code: command });
+    feed(p, { kind: 'step', text: `Finished: ${step.title} · person in ${r.withPerson}/${r.frames} frames · face in ${r.withFace}/${r.frames} · ${r.seconds}s in ${r.chunks} parallel chunk${r.chunks === 1 ? '' : 's'}`, stepId: step.id });
+    feed(p, { kind: 'op', op: 'cutout', text: `Cutout ready for ${as.name}: ${r.frames} frames, person found in ${r.withPerson}, face in ${r.withFace}`, why }); emit(p);
+    return r;
+  })());
+}
+function startTranscript(p, as, { model = 'base.en', language, why } = {}) {
+  return track(p, as, 'transcript', (async () => {
+    as.transcribing = true; feed(p, { kind: 'op', op: 'transcribe', text: `Transcribing ${as.name} with Whisper ${model}…`, why }); emit(p);
+    try {
+      const tr = await media.transcribe(as.path, { model, language });
+      const env = loadEnv(p)(as.id);
+      const al = env ? media.alignWordsToSpeech(tr.words, env) : { words: tr.words, moved: 0 };
+      as.transcript = { engine: tr.engine, words: al.words, realigned: al.moved };
+      feed(p, { kind: 'op', op: 'transcript', text: `Transcript ready: ${tr.words.length} words with word-level timing${al.moved ? ` · ${al.moved} word(s) Whisper had placed inside silence were moved onto the measured speech` : ''}` });
+      return as.transcript;
+    } finally { delete as.transcribing; emit(p); }
+  })());
+}
+/** Wait for background cutouts/transcripts of the given assets. Returns what was waited for, for the tool result. */
+async function awaitPrep(p, assetIds, kinds = ['cutout']) {
+  const waited = [];
+  for (const id of new Set(assetIds)) for (const k of kinds) {
+    const as = p.assets[id], job = as && pendingOf(p, as, k); if (!job) continue;
+    const t0 = Date.now(); try { await job; } catch {}
+    waited.push(`waited ${round((Date.now() - t0) / 1000, 1)}s for the background ${k} of ${id}`);
+  }
+  return waited;
+}
+/** Assets under effect clips that use a cutout. */
+const effectAssets = (p) => p.clips.filter((c) => c.kind === 'effect' && (EFFECTS[c.effect.type]?.needs === 'cutout' || EFFECTS[c.effect.type]?.uses === 'cutout')).flatMap((c) => sourceClips(p, c).map((x) => x.asset));
+
+async function renderStill(p, t, maxDim = 720, effects = {}) {
   const out = cacheFile(p, `look_${uid()}.jpg`);
-  const g = buildGraph(p, { window: [t], still: true, rasters: p.rasters, assetPath: assetPath(p), scale: Math.min(1, maxDim / Math.max(p.width, p.height)) });
+  const g = buildGraph(p, { window: [t], still: true, rasters: p.rasters, effects, assetPath: assetPath(p), scale: Math.min(1, maxDim / Math.max(p.width, p.height)) });
   await run('ffmpeg', ffmpegArgs(g, out, { still: true }).filter((x) => x !== '-nostats'));
   return { file: out, warnings: g.warnings };
 }
@@ -298,9 +394,18 @@ const handlers = {
       else files.push(abs);
     }
     if (!files.length) throw new Error('frame_import needs paths: absolute paths to video, audio or image files (or a folder of them).');
-    const out = [];
-    for (const f of files) { try { out.push(assetSummary(p, await importOne(p, f, a))); } catch (e) { out.push(`✗ ${f}: ${e.message}`); } }
-    return [text(`Imported into "${p.name}":\n` + out.map((s) => '  ' + s).join('\n'))];
+    const out = [], prep = [];
+    for (const f of files) {
+      try {
+        const as = await importOne(p, f, a); out.push(assetSummary(p, as));
+        // prepare (default on for video up to 3 minutes): start the person cutout and the transcript in the background now.
+        if (a.prepare !== false && as.kind === 'video' && as.duration <= 180) {
+          if (!as.cutout && !pendingOf(p, as, 'cutout') && (await cutoutEngine()).id) { startCutout(p, as, { from: 0, to: as.duration, auto: true, why: 'Started at import so effects are ready when they are placed' }).catch(() => {}); prep.push(`person cutout of ${as.id} (${Math.round(as.duration * (as.fps || 30))} frames)`); }
+          if (as.hasAudio && !as.transcript && !pendingOf(p, as, 'transcript') && (await media.whisperAvailable())) { startTranscript(p, as, { why: 'Started at import so words are ready for captions and cues' }).catch(() => {}); prep.push(`transcript of ${as.id}`); }
+        }
+      } catch (e) { out.push(`✗ ${f}: ${e.message}`); }
+    }
+    return [text(`Imported into "${p.name}":\n` + out.map((s) => '  ' + s).join('\n') + (prep.length ? `\n\nPreparing in the background: ${prep.join(', ')}. frame_cutout, frame_transcribe, effects and captions wait for them automatically; carry on editing.` : ''))];
   },
 
   async frame_transcribe(a) {
@@ -311,16 +416,10 @@ const handlers = {
       feed(p, { kind: 'op', op: 'transcript', text: `Transcript attached to ${asset.name}: ${asset.transcript.words.length} words` }); emit(p);
       return [text(`Stored ${asset.transcript.words.length} words on ${asset.id}.`)];
     }
-    if (asset.transcript && !a.force) return [text(`Transcript of ${asset.id} (${asset.transcript.engine}), source seconds:\n${transcriptLines(asset.transcript.words)}`)];
+    const waited = await awaitPrep(p, [asset.id], ['transcript']);
+    if (asset.transcript && !a.force) return [text(`${waited.length ? `(${waited[0]})\n` : ''}Transcript of ${asset.id} (${asset.transcript.engine}), source seconds:\n${transcriptLines(asset.transcript.words)}`)];
     if (!(await media.whisperAvailable())) return [text(`No local Whisper is installed, so Frame cannot transcribe by itself. Options: (1) install it — \`pip install -U openai-whisper\` — and call again, or (2) get word timings any other way and call frame_transcribe with words: [{text,start,end}].`)];
-    asset.busy = 'transcribing'; feed(p, { kind: 'op', op: 'transcribe', text: `Transcribing ${asset.name} with Whisper ${a.model || 'base.en'}…`, why: a.why }); emit(p);
-    try {
-      const tr = await media.transcribe(asset.path, { model: a.model || 'base.en', language: a.language });
-      const env = loadEnv(p)(asset.id);
-      const al = env ? media.alignWordsToSpeech(tr.words, env) : { words: tr.words, moved: 0 };
-      asset.transcript = { engine: tr.engine, words: al.words, realigned: al.moved };
-      feed(p, { kind: 'op', op: 'transcript', text: `Transcript ready: ${tr.words.length} words with word-level timing${al.moved ? ` · ${al.moved} word(s) Whisper had placed inside silence were moved onto the measured speech` : ''}` });
-    } finally { delete asset.busy; emit(p); }
+    await startTranscript(p, asset, { model: a.model || 'base.en', language: a.language, why: a.why });
     return [text(`Transcript of ${asset.id} (${asset.transcript.engine}), source seconds. Whisper can mishear names — check before using as captions.\n${transcriptLines(asset.transcript.words)}`)];
   },
 
@@ -336,6 +435,10 @@ const handlers = {
     const p = current(a.project_id);
     if (!Array.isArray(a.ops) || !a.ops.length) throw new Error('frame_edit needs ops: [{op: "...", ...}].');
     if (p.paused) return [text('Not applied.')];
+    if (a.ops.some((o) => ['add_captions', 'add_effects_at_words'].includes(o.op))) { // these read the transcript: wait for one still being made
+      const tracks = new Set(a.ops.map((o) => o.source_track || o.source || 'V1'));
+      await awaitPrep(p, p.clips.filter((c) => tracks.has(c.track) && c.asset).map((c) => c.asset), ['transcript']);
+    }
     snapshot(p);
     if (a.summary) { feed(p, { kind: 'decision', text: a.summary, agent: a.agent }); emit(p); await sleep(PACE); }
     const results = [];
@@ -423,6 +526,37 @@ const handlers = {
     return [text(msg)];
   },
 
+  async frame_cutout(a) {
+    const p = current(a.project_id);
+    const as = p.assets[a.asset];
+    if (!as) throw new Error(`No asset "${a.asset}". Assets: ${Object.keys(p.assets).join(', ') || 'none'}`);
+    if (as.kind !== 'video') throw new Error(`${as.name} is ${as.kind}; frame_cutout works on video footage.`);
+    const { from, to } = cutoutRange(p, as, a);
+    if (!(to - from >= 0.1)) throw new Error(`from ${from} – to ${to} is not a range of ${as.name} (${as.duration}s long).`);
+    const waited = await awaitPrep(p, [as.id], ['cutout']);
+    const quality = ['fast', 'balanced', 'accurate'].includes(a.quality) ? a.quality : as.cutout?.quality || 'balanced';
+    const ready = (c) => c && c.from <= from + 1e-3 && c.to >= to - 1e-3 && c.quality === quality;
+    let r = as.cutout;
+    if (!ready(r) || a.force) r = await startCutout(p, as, { from, to, quality, why: a.why });
+    else if (!waited.length) return [text(`${as.id} already has a cutout covering source ${r.from}–${r.to}s (${r.engine}, ${r.quality}). Pass force: true to make it again.`)];
+    const facePart = `face found in ${r.withFace}/${r.frames}`;
+    const warn = r.withPerson < r.frames * 0.9 ? `\n⚠ No person was found in ${r.frames - r.withPerson} of ${r.frames} frames; effects that need the cutout show nothing of the person on those frames.` : '';
+    return [text(`${waited.length ? `(${waited.join('; ')})\n` : ''}Cut out the person in ${as.id} (${as.name}), source ${r.from}–${r.to}s: ${r.frames} frames at ${r.fps} fps, ${r.width}×${r.height}, in ${r.seconds}s with ${r.engineLabel} (${r.quality}, ${r.chunks} parallel chunk${r.chunks === 1 ? '' : 's'}).\nMeasured on the matte: person in ${r.withPerson}/${r.frames} frames, on average ${Math.round(r.cover * 100)}% of the picture; ${facePart}.${warn}\nEffects marked [needs a cutout] can now be used on this footage (frame_effects lists them).`)];
+  },
+
+  async frame_effects(a) {
+    const p = (() => { try { return current(a.project_id); } catch { return null; } })();
+    let s = `Effect clips are layers on a V track above the footage they read (V1 unless source is set). Add one with frame_edit {op:"add_effect", effect, start, duration, params?, track?, source?}; change settings with update_clip {id, params:{…}}; opacity, fadeIn and fadeOut work as on any clip. Every effect is drawn by ui/effects.js — the same code in the window preview, frame_view and the render.\n\n${describeEffects()}`;
+    if (p) {
+      const vids = Object.values(p.assets).filter((x) => x.kind === 'video');
+      if (vids.length) s += `\n\nCutouts in this project: ${vids.map((x) => `${x.id} ${x.cutout ? `✓ source ${x.cutout.from}–${x.cutout.to}s` : x.cutting ? `… ${x.cutting} (background)` : '✗ none (frame_cutout)'}`).join(' · ')}`;
+      const fx = p.clips.filter((c) => c.kind === 'effect');
+      for (const c of fx) { const pr = effectProblem(p, c); if (pr) s += `\n⚠ ${c.id} (${c.effect.type}): ${pr}${sourceClips(p, c).some((x) => pendingOf(p, p.assets[x.asset], 'cutout')) ? ' (a cutout is being made in the background right now; it is waited for automatically)' : ''}`; }
+      const busy = vids.filter((x) => x.cutting); if (busy.length) s += `\nCutouts running in the background: ${busy.map((x) => `${x.id} ${x.cutting}`).join(', ')}`;
+    }
+    return [text(s)];
+  },
+
   async frame_view(a) {
     const p = current(a.project_id); const content = [];
     if (a.asset) {
@@ -437,16 +571,20 @@ const handlers = {
       feed(p, { kind: 'look', text: `Looked at ${asset.name} at ${times.map((t) => tc(t)).join(', ')}`, why: a.why });
       emit(p); return content;
     }
-    const times = (a.times || [a.t ?? 0]).slice(0, 6);
+    const times = (a.times || [a.t ?? 0]).slice(0, 6).map((t) => Math.round(Number(t) * p.fps) / p.fps); // whole frames, so effects line up with the footage
     const { missing, reason } = await ensureRasters(p);
+    const waited = await awaitPrep(p, effectAssets(p));
+    if (waited.length) content.push(text(`(${waited.join('; ')})`));
+    const fx = await drawEffects(p, { times });
     for (const t of times) {
-      const r = await renderStill(p, Number(t));
+      const r = await renderStill(p, Number(t), 720, fx.drawn);
       const name = path.basename(r.file);
       content.push(text(`Composited frame at ${t}s (rendered by the same ffmpeg graph as the final export):`), { type: 'image', data: fs.readFileSync(r.file).toString('base64'), mimeType: 'image/jpeg' });
       feed(p, { kind: 'look', text: `Checked the composited frame at ${tc(Number(t))}`, why: a.why, img: `/cache/${p.id}/${name}`, t: Number(t) });
       emit(p, { focus: { t: Number(t), agent: 'Claude' } });
     }
     if (missing.length) content.push(text(`⚠ ${missing.length} text clip(s) are NOT in these frames (${missing.map((c) => `"${c.text.content.slice(0, 20)}"`).join(', ')}): ${reason}.`));
+    for (const pr of fx.problems) content.push(text(`⚠ Effect not in these frames: ${pr}`));
     return content;
   },
 
@@ -490,13 +628,20 @@ const handlers = {
     const D = projectDuration(p); if (!D) throw new Error('The timeline is empty — nothing to render.');
     const { missing, reason } = await ensureRasters(p, 3000);
     if (missing.length && !a.allow_missing_text) throw new Error(`Not rendered: ${missing.length} text clip(s) could not be drawn from their current text and style (${missing.map((c) => `"${c.text.content.slice(0, 20)}"`).join(', ')}): ${reason}. Fix that and render again, or pass allow_missing_text: true to render without them.`);
+    // Refuse before drawing anything when an effect cannot be drawn; then draw, and refuse if drawing itself failed.
+    const refuse = (list) => { throw new Error(`Not rendered: ${list.join(' ')} Fix that and render again, or pass allow_missing_effects: true to render without them.`); };
+    const waited = await awaitPrep(p, effectAssets(p));
+    const known = p.clips.filter((c) => c.kind === 'effect').map((c) => [c, effectProblem(p, c)]).filter(([, pr]) => pr).map(([c, pr]) => `${EFFECTS[c.effect.type]?.label || c.effect.type} (${c.id}) at ${round(c.start, 2)}s was left out: ${pr}.`);
+    if (known.length && !a.allow_missing_effects) refuse(known);
+    const fx = await drawEffects(p, { window: [0, D] });
+    if (fx.problems.length && !a.allow_missing_effects) refuse(fx.problems);
     const quality = a.quality === 'draft' ? 'draft' : 'final';
     const n = p.renders.length + 1;
     const safe = p.name.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'frame';
     const videos = ['Movies', 'Videos'].map((d) => path.join(os.homedir(), d)).find((d) => fs.existsSync(d)); // macOS, Windows
     const outDir = mkdirp(a.output_dir ? path.resolve(a.output_dir.replace(/^~(?=[\\/])/, os.homedir())) : path.join(videos || os.homedir(), 'Frame'));
     const file = path.join(outDir, `${safe}_v${n}${quality === 'draft' ? '_draft' : ''}.mp4`);
-    const g = buildGraph(p, { rasters: p.rasters, assetPath: assetPath(p), scale: quality === 'draft' ? 0.5 : 1, loudnorm: a.loudnorm !== false });
+    const g = buildGraph(p, { rasters: p.rasters, effects: fx.drawn, assetPath: assetPath(p), scale: quality === 'draft' ? 0.5 : 1, loudnorm: a.loudnorm !== false });
     const r = { id: 'r' + n, status: 'rendering', progress: 0, file, quality, startedAt: Date.now(), timelineVersion: p.version };
     p.renders.push(r); p.status = { state: 'rendering', label: 'Rendering' };
     feed(p, { kind: 'render', text: `Rendering ${quality} MP4 · ${round(D, 2)}s · ${g.inputs.length} inputs through ffmpeg`, why: a.why, renderId: r.id }); emit(p);
@@ -508,7 +653,7 @@ const handlers = {
       p.status = { state: 'done', label: 'Render complete' };
       feed(p, { kind: 'render', text: `Render complete · ${info.width}×${info.height} · ${info.duration}s · ${(r.bytes / 1e6).toFixed(1)} MB${loud ? ` · ${loud.lufs} LUFS` : ''} · took ${round((r.endedAt - r.startedAt) / 1000, 1)}s`, renderId: r.id, done: true });
       emit(p, { rendered: r.id });
-      return [text(`Rendered: ${file}\nMeasured: ${info.width}×${info.height}, ${info.duration}s, ${(r.bytes / 1e6).toFixed(1)} MB${loud ? `, ${loud.lufs} LUFS integrated, true peak ${loud.true_peak_db} dBFS` : ''}.${[...g.warnings, ...(missing.length ? [`${missing.length} text clip(s) left out of this render on request (allow_missing_text): ${reason}`] : [])].map((w) => '\n⚠ ' + w).join('')}\nThe user can play it in the Frame window. Use frame_view to check frames yourself.`)];
+      return [text(`Rendered: ${file}\nMeasured: ${info.width}×${info.height}, ${info.duration}s, ${(r.bytes / 1e6).toFixed(1)} MB${loud ? `, ${loud.lufs} LUFS integrated, true peak ${loud.true_peak_db} dBFS` : ''}.${fx.count ? `\nDrew ${fx.count} new effect frame(s) with ui/effects.js in headless Chrome.` : ''}${[...g.warnings, ...(missing.length ? [`${missing.length} text clip(s) left out of this render on request (allow_missing_text): ${reason}`] : []), ...fx.problems].map((w) => '\n⚠ ' + w).join('')}\nThe user can play it in the Frame window. Use frame_view to check frames yourself.`)];
     } catch (e) {
       Object.assign(r, { status: 'failed', error: e.message }); p.status = { state: 'idle', label: 'Render failed' };
       feed(p, { kind: 'render', text: 'Render failed: ' + e.message.slice(-300), renderId: r.id }); emit(p);
@@ -517,7 +662,7 @@ const handlers = {
   },
 };
 
-const MUTATING = new Set(['frame_pack', 'frame_import', 'frame_edit', 'frame_cut_silence', 'frame_render', 'frame_step', 'frame_transcribe', 'frame_camera_move']);
+const MUTATING = new Set(['frame_pack', 'frame_import', 'frame_edit', 'frame_cut_silence', 'frame_render', 'frame_step', 'frame_transcribe', 'frame_camera_move', 'frame_cutout']);
 let chain = Promise.resolve();
 async function callTool(name, args) {
   const h = handlers[name];
@@ -566,6 +711,7 @@ async function uiAction(b) {
     case 'render': callTool('frame_render', { project_id: p.id, quality: b.quality, why: 'Requested from the Frame window' }); say('control', `User started a ${b.quality || 'final'} render from the Frame window.`); return { ok: true };
     case 'reveal': { const r = p.renders.find((x) => x.id === b.id); if (r?.file && fs.existsSync(r.file)) { if (process.platform === 'darwin') spawn('open', ['-R', r.file]); else if (process.platform === 'win32') spawn('explorer', [`/select,"${r.file}"`], { windowsVerbatimArguments: true }); else openBrowser(path.dirname(r.file)); } return { ok: true }; }
     case 'approve': return approveRender(p, b.id);
+    case 'cutout': callTool('frame_cutout', { project_id: p.id, asset: b.asset, force: !!p.assets[b.asset]?.cutout, why: 'Requested from the Frame window' }); say('control', `User started a person cutout of ${b.asset} from the Frame window.`); return { ok: true };
     case 'save_clip': return saveClipToLibrary(p, b.id, b.label);
     case 'pack_use': { try { const pk = packs.getPack(b.pack); const as = await importOne(p, packs.packFile(pk, b.item), { actor: 'user', why: `From audio pack "${pk.name}"` }); as.pack = { pack: pk.id, item: b.item }; say('manual edit', `User added ${pk.name} / ${b.item} from the audio pack`); } catch (e) { return { error: e.message }; } break; }
     case 'import': { for (const f of b.paths || []) { try { await importOne(p, f, { actor: 'user' }); say('manual edit', `User imported ${f}`); } catch (e) { return { error: e.message }; } } break; }
@@ -605,7 +751,8 @@ export function startDaemon() {
       const url = new URL(req.url, BASE); const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
       if (req.method === 'GET') {
         if (url.pathname === '/') return sendFile(req, res, path.join(UI_DIR, 'index.html'));
-        if (['app.js', 'text-draw.js', 'style.css', 'favicon.svg'].includes(parts[0]) && parts.length === 1) return sendFile(req, res, path.join(UI_DIR, parts[0]));
+        if (['app.js', 'text-draw.js', 'effects.js', 'fx-render.html', 'style.css', 'favicon.svg'].includes(parts[0]) && parts.length === 1) return sendFile(req, res, path.join(UI_DIR, parts[0]));
+        if ((parts[0] === 'fxin' || (parts[0] === 'api' && parts[1] === 'fxjob')) && await handleJobRequest(req, res, parts, body)) return;
         if (url.pathname === '/api/ping') return json(res, { name: 'frame', version: VERSION, pid: process.pid, clients: clients.size });
         if (url.pathname === '/api/packs') return json(res, { packs: packs.listPacks() });
         if (parts[0] === 'pack' && parts.length === 3) { const pk = packs.getPack(parts[1]); const f = pk && pk.items.find((i) => i.file === parts[2]); return f ? sendFile(req, res, path.join(HOME, 'packs', pk.id, f.file), 'private, max-age=3600') : res.writeHead(404).end(); }
@@ -619,6 +766,8 @@ export function startDaemon() {
         }
         const p = parts[1] && load(parts[1]);
         if (p && parts[0] === 'media') { const a = p.assets[parts[2]]; if (!a) return res.writeHead(404).end(); return sendFile(req, res, a.proxy ? cacheFile(p, `${a.id}.proxy.mp4`) : a.path, 'private, max-age=3600'); }
+        if (p && parts[0] === 'matte') { const a = p.assets[parts[2]]; if (!a?.cutout) return res.writeHead(404).end(); return sendFile(req, res, matteFile(p)(a), 'private, max-age=3600'); }
+        if (p && parts[0] === 'track') { const a = p.assets[parts[2]]; if (!a?.cutout) return res.writeHead(404).end(); return sendFile(req, res, cacheFile(p, `${a.id}.track.json`), 'private, max-age=3600'); }
         if (p && parts[0] === 'thumbs') return sendFile(req, res, cacheFile(p, `${path.basename(parts[2])}.thumbs.jpg`), 'private, max-age=3600');
         if (p && parts[0] === 'env') return sendFile(req, res, cacheFile(p, `${path.basename(parts[2])}.env.json`), 'private, max-age=3600');
         if (p && parts[0] === 'cache') return sendFile(req, res, cacheFile(p, path.basename(parts[2])), 'private, max-age=3600');
@@ -640,6 +789,7 @@ export function startDaemon() {
           storeRaster(p, c, png, Number(url.searchParams.get('x')), Number(url.searchParams.get('y')), drawn, 'window');
           save(p); return json(res, { ok: true });
         }
+        if (parts[0] === 'api' && parts[1] === 'fxjob' && await handleJobRequest(req, res, parts, body)) return;
         if (url.pathname === '/api/shutdown') { json(res, { ok: true }); setTimeout(() => process.exit(0), 100); return; }
       }
       res.writeHead(404).end('not found');

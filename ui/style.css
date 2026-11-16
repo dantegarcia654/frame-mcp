@@ -150,3 +150,13 @@ aside { background: var(--p); display: flex; flex-direction: column; min-height:
 #packs .pkItem .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #packs .pkItem button { width: 22px; height: 20px; padding: 0; font-size: 10px; cursor: pointer; }
 .textEditor { position: absolute; z-index: 20; box-sizing: border-box; background: rgba(0,0,0,.78); color: #fff; border: 1px dashed #fff; border-radius: 3px; padding: 4px 6px; font-weight: 800; text-align: center; line-height: 1.2; resize: none; outline: none; user-select: text; overflow: hidden; }
+
+/* Effect clips and the person cutout */
+#effects { padding: 0 12px; max-height: 220px; overflow: auto; font-size: 11px; }
+#effects .pkItem { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+#effects .pkItem .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#effects .pkItem .dim { font: 9px var(--mono); letter-spacing: .04em; }
+#effects .pkItem button { width: 22px; height: 20px; padding: 0; font-size: 10px; cursor: pointer; }
+.asset button.cut { display: block; width: calc(100% - 12px); margin: 0 6px 6px; padding: 2px 4px; font: 9px var(--mono); letter-spacing: .02em; overflow: hidden; text-overflow: ellipsis; }
+.clip.effect { background: repeating-linear-gradient(135deg, #1d1d1d 0 6px, #111 6px 12px); border-style: dashed; }
+.clip.effect .lb { background: none; position: static; display: block; font: 600 10px/1.9 -apple-system, sans-serif; padding: 0 6px; }

@@ -10,7 +10,8 @@ How to work:
 4. Think out loud with frame_note (kind "thinking" / "decision") — short, specific, one idea each. This is what removes the black box; do it before each batch of edits.
 5. Change the timeline ONLY through frame_edit. Give each op a "why". Prefer several small batches over one giant one, so the user can interrupt.
 6. Audio you use (a soundtrack, sound effects) gets saved with frame_pack save, so it lives inside Frame as a reusable pack. If you do anything outside Frame (a custom ffmpeg/python script, an AI generation, a download), wrap it in frame_step: call it with status "running" and the exact command/code before you run it, and status "done" with output file paths after. Outputs are imported automatically.
-7. frame_view the composited result at a few timestamps before you render. frame_render when it is right.
+7. Effects (clone row, text behind the person, orbiting text, rack focus, code body, letter window, tracking box, impact frame, comment drop, blow away, agent swarm) are clips too: frame_effects lists them and their settings; effects that need the person cut out need frame_cutout on that footage first. Add them with frame_edit add_effect — never fake an effect with an outside script.
+8. frame_view the composited result at a few timestamps before you render. frame_render when it is right.
 
 The user's hands are on the same timeline. EVERY tool result may end with a "FROM THE USER" block — messages typed in Frame, manual trims/moves, pause. Treat that as the user speaking to you: obey it before continuing. If you are paused, stop and call frame_wait.
 
@@ -48,6 +49,7 @@ export const TOOLS = [
     name: 'frame_import',
     description: 'Bring video, audio or image files into the project bin. Frame probes each file and measures loudness and silences; the result lists them (source seconds). Paths must be absolute local paths; a folder imports every media file in it.',
     inputSchema: { type: 'object', required: ['paths'], properties: {
+      prepare: { type: 'boolean', description: 'Default true: for video up to 3 minutes, start the person cutout and the transcript in the background right away, so effects and captions are ready when you place them. false = do neither.' },
       paths: { type: 'array', items: { type: 'string' } },
       scenes: { type: 'boolean', description: 'Also detect scene changes in video (slower). Useful for B-roll or pre-edited footage.' },
       ...why, ...pid,
@@ -88,12 +90,16 @@ Ops:
 • cut_range {from, to, tracks?, ripple?} — remove a span of the timeline (default: every track, gap closed).
 • remove_silences {track?, style?, min_silence?, keep?, threshold_db?, dry_run?} — same as the frame_cut_silence tool (prefer that tool). Adaptive: measures each clip's own noise floor, no threshold guessing.
 • add_text {text, start, duration, track?, style?}
+• add_effects_at_words {stop?, params?, only?, max?, min?, track?, source_track?} — the effects-reel recipe in one op: the person says each effect's name (its cue words, listed by frame_effects) and that effect starts on the word, running until the next cue or a stop word (e.g. stop:["comment"] for a call to action), at most max seconds (default 3). params:{blow_away:{plate:"a2"}} sets per-effect settings. Reports what it placed, what it heard, and which effects were never said.
+• add_agent_swarm {track?, source_track?, params?} — draws the agents that made the edit over the video (an agent_swarm effect on V3): each agent's cursor and coloured tag flies to the effect it placed, boxes it and holds it while it plays. Built from the edit history, so give each effect op an agent label. Rebuild it after changing effects.
+• add_effect {effect, start, duration?, params?, track?, source?} — an effect clip (default 1.5 s on V2, reading V1). frame_effects lists the effects and their settings; change settings later with update_clip {id, params:{…}}. Effects marked [needs a cutout] need frame_cutout on the footage under them first.
 • add_captions {source_track?, max_words?, max_chars?, style?, track?, replace?} — builds captions from the transcript, following every cut. Or pass phrases:[{text,start,end}] in timeline seconds.
 • style_text {track?, style, all?} — restyle every caption on a track in one go (all: true includes non-caption text).
 • close_gaps {track} · clear_track {track} · add_marker {t,label} · delete_marker {id} · set_project {name?, aspect?, fps?, magnetic?}
 
 Clip props: start, in, out, track, speed (0.25–4), volume (0–4), muted, fit ("cover"|"contain"), scale, x, y (offset as a fraction of the frame; 0 = centred), opacity, fadeIn, fadeOut (seconds; fades picture and sound), label,
 grade {brightness, contrast, saturation} (1 = unchanged; saturation 0 = black & white), key {color:"#00ff00", similarity, blend} (chroma key / green screen; set null to remove).
+Effect clips also take params {…} and source ("V1"…), plus start, duration, opacity, fadeIn, fadeOut.
 Text style: size (fraction of frame height, default 0.055), color, stroke, strokeWidth, bg (box colour or null), weight, x, y (centre position 0–1), maxWidth, uppercase, font.`,
     inputSchema: { type: 'object', required: ['ops'], properties: {
       ops: { type: 'array', items: { type: 'object', required: ['op'], properties: { op: { type: 'string' }, why: { type: 'string' } }, additionalProperties: true } },
@@ -147,6 +153,21 @@ Text style: size (fraction of frame height, default 0.055), color, stroke, strok
     } },
   },
   {
+    name: 'frame_cutout',
+    description: 'Cut the person out of a video asset, on this machine: a matte for every frame (white = person) plus the face and person box on every frame. Effects that put things behind the person, copy them, blur around them or track them need this. macOS uses Apple Vision person segmentation; other systems use rembg if installed. It runs every frame in parallel chunks (measured: a 30 s 1080×1920 take in about 12 s on "balanced", the default; "accurate" is about 2.5× slower and sharper at the hair), starts by itself at import (frame_import prepare), and is waited for automatically by anything that needs it; shows as a process step with the exact command, and returns measured results: how many frames contain a person and a face. Default range: the part of the footage the timeline uses (±0.5 s), or the whole clip if it is not placed yet.',
+    inputSchema: { type: 'object', required: ['asset'], properties: {
+      asset: { type: 'string', description: 'Video asset id.' },
+      from: { type: 'number', description: 'Source seconds. Default: start of what the timeline uses.' }, to: { type: 'number', description: 'Source seconds. Default: end of what the timeline uses.' },
+      quality: { type: 'string', enum: ['accurate', 'balanced', 'fast'], description: 'Default "balanced".' },
+      force: { type: 'boolean', description: 'Make it again even if a cutout already covers the range.' }, ...why, ...pid,
+    } },
+  },
+  {
+    name: 'frame_effects',
+    description: 'List the effects Frame can draw, what each one does, its settings with their ranges, and whether it needs a cutout — plus which assets in the open project already have one, and any effect on the timeline that cannot be drawn yet and why. Read this before adding effects.',
+    inputSchema: { type: 'object', properties: { ...pid } },
+  },
+  {
     name: 'frame_view',
     description: 'Look with your own eyes. With t/times: returns the composited timeline frame(s), rendered by the same ffmpeg graph as the export — use it to verify framing, keying, grade and captions. With asset + times: returns raw source frames, for choosing takes. Up to 6 frames.',
     inputSchema: { type: 'object', properties: {
@@ -176,6 +197,7 @@ Text style: size (fraction of frame height, default 0.055), color, stroke, strok
     inputSchema: { type: 'object', properties: {
       quality: { type: 'string', enum: ['draft', 'final'] }, loudnorm: { type: 'boolean' },
       allow_missing_text: { type: 'boolean', description: 'Render even if some captions cannot be drawn from their current text and style. By default the render refuses rather than ship missing or stale text.' },
+      allow_missing_effects: { type: 'boolean', description: 'Render even if some effect clips cannot be drawn (e.g. no cutout yet). By default the render refuses and says why.' },
       output_dir: { type: 'string', description: 'Folder for the MP4. Default ~/Movies/Frame (~/Videos/Frame on Windows).' }, ...why, ...pid,
     } },
   },
