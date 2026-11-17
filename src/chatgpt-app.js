@@ -34,8 +34,8 @@ function resource(){
      const signature=JSON.stringify(args);
      if(lastPrompt===signature)return;
      lastPrompt=signature;
-     if(window.frameApp?.apply)window.frameApp.apply(prompt);
-     else window.setTimeout(function(){if(window.frameApp?.apply)window.frameApp.apply(prompt)},0);
+     if(window.frameApp?.apply)window.frameApp.apply(prompt,{source:"mcp",project_id:args?.project_id});
+     else window.setTimeout(function(){if(window.frameApp?.apply)window.frameApp.apply(prompt,{source:"mcp",project_id:args?.project_id})},0);
    }
    window.addEventListener('message',function(event){
      if(event.source!==window.parent)return;
