@@ -25,7 +25,7 @@ const tool={
 function resource(){
  let html=fs.readFileSync(path.join(ROOT,'mobile','index.html'),'utf8');
  // The mobile UI is owned by FRAME; the resource is served directly, not embedded from Wix.
- const bridge=\`<script>
+ const bridge=`<script>
  (function(){
    let initialized=false,lastPrompt='';
    function apply(args){
@@ -56,7 +56,7 @@ function resource(){
    }
    if(window.openai?.toolInput)apply(window.openai.toolInput);
  })();
- <\/script>\`;
+ <\/script>`;
  html=html.replace('</body>',bridge+'</body>');
  return {contents:[{uri:URI,mimeType:MIME,text:html,_meta:{ui:{prefersBorder:false},'openai/ui':{availableDisplayModes:['inline','fullscreen']}}}]};
 }
