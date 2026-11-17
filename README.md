@@ -82,15 +82,16 @@ Projects live in `~/.frame`. Renders go to `~/Movies/Frame` (`~/Videos/Frame` on
 
 | Tool | What it does |
 | --- | --- |
-| `frame_start` | Opens the window and a project. Always the first call. |
+| `frame_start` | Opens the window and a project. Always the first call. Returns your style profile (`~/.frame/profiles/default.md`) if you have one. |
 | `frame_import` | Adds video, audio or images; measures loudness and silences. |
 | `frame_transcribe` | Word-level transcript (local Whisper), or accepts supplied words. |
 | `frame_note` | Shows Claude's thinking and decisions in the feed. |
 | `frame_cut_silence` | One-call dead-air removal. Adaptive to each clip's own noise floor, `natural`/`tight`/`aggressive` styles, `dry_run` preview. |
-| `frame_edit` | Timeline operations, applied live: add, keep ranges, trim, split, move, delete, cut range, remove silences, text, captions, grade, chroma key, scale/position, speed, volume, fades. |
+| `frame_edit` | Timeline operations, applied live: add, keep ranges, trim, split, move, delete, cut range, remove silences, text, captions, grade, chroma key, scale/position, speed, volume, fades, slip. |
 | `frame_step` | Logs work done outside Frame with its exact code and imports the outputs. |
 | `frame_view` | Returns composited frames (or raw source frames) so Claude can look at its work. |
 | `frame_state` | Re-reads the timeline and collects your changes and messages. |
+| `frame_profile` | Shows or lists style profiles: your editing rules, shared by every AI and every copy of Frame. |
 | `frame_wait` | Waits for you when Claude asked a question or was paused. |
 | `frame_history` | Undo / redo. |
 | `frame_render` | Renders H.264/AAC MP4 through ffmpeg; reports measured size, duration and loudness. |

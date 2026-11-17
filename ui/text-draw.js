@@ -31,6 +31,39 @@ export function drawText(g, c, W, H) {
 }
 
 /**
+ * Lines: split the words of a caption into exactly n lines (fewer if there are fewer words) so the widest line is as
+ * short as possible. measure(str) returns the drawn width of a line. Captions are a few words, so an exhaustive search is cheap.
+ * @returns { lines: string[], widest } — widest is measure() of the widest line
+ */
+export function balanceLines(content, n, measure) {
+  const words = String(content).replace(/\n/g, ' ').split(/\s+/).filter(Boolean);
+  if (!words.length) return { lines: [], widest: 0 };
+  n = clampN(Math.floor(n) || 1, 1, words.length);
+  const N = words.length, w = (i, j) => measure(words.slice(i, j).join(' '));
+  const best = Array.from({ length: n + 1 }, () => Array(N + 1).fill(Infinity)), cut = Array.from({ length: n + 1 }, () => Array(N + 1).fill(0));
+  best[0][0] = 0;
+  for (let k = 1; k <= n; k++) for (let j = k; j <= N; j++) for (let i = k - 1; i < j; i++) { const v = Math.max(best[k - 1][i], w(i, j)); if (v < best[k][j]) { best[k][j] = v; cut[k][j] = i; } }
+  const lines = []; for (let k = n, j = N; k > 0; k--) { const i = cut[k][j]; lines.unshift(words.slice(i, j).join(' ')); j = i; }
+  return { lines, widest: best[n][N] };
+}
+
+/**
+ * The style a Lines button sets: the text reflowed into n balanced lines, sized as large as fits the frame (up to normal
+ * caption size), and a line width just wide enough that drawText keeps exactly those breaks. n = 'auto' joins the words
+ * back into one paragraph and lets drawText wrap it again. measureAt(str, sizeFraction) measures with the caption's font.
+ * @returns { text, style: { size?, maxWidth } }
+ */
+export function reflowLines(c, n, W, measureAt) {
+  const s = c.text, round3 = (v) => Math.round(v * 1000) / 1000;
+  if (n === 'auto' || n === 'Auto') return { text: String(s.content).replace(/\n/g, ' ').split(/\s+/).filter(Boolean).join(' '), style: { maxWidth: 0.84 } };
+  const { lines, widest } = balanceLines(s.content, n, (str) => measureAt(s.uppercase ? str.toUpperCase() : str, s.size));
+  if (!lines.length) return { text: s.content, style: {} };
+  const room = 0.94 * W, size = Math.min(Math.max(s.size, 0.055), (s.size * room) / widest); // 1 line → 3 lines grows the text back
+  const widestAt = (widest * size) / s.size;
+  return { text: lines.join('\n'), style: { size: round3(size), maxWidth: round3(clampN(widestAt / W + 0.04, 0.12, 1)) } };
+}
+
+/**
  * Draw one text clip on a full frame and crop it to its box.
  * @param make (w, h) => canvas — OffscreenCanvas in the window, a <canvas> element in headless Chrome
  * @returns { x, y, canvas } where x, y is where the crop sits in the frame

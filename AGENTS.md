@@ -19,7 +19,7 @@ Requirements: Node 18+, `ffmpeg` and `ffprobe` on PATH. Optional: `pip install -
 git clone https://github.com/dantegarcia654/frame-mcp.git
 cd frame-mcp
 node bin/frame.js doctor     # checks node, ffmpeg, whisper
-node test/smoke.js           # 9 end-to-end checks on a scratch instance, about 10 s
+node test/smoke.js           # 37 end-to-end checks on a scratch instance, about 30 s
 ```
 
 The smoke test generates its own test video, starts a private copy of the service on port 4791 with a temporary data folder, and cleans up. It does not open a browser and does not touch `~/.frame`.
