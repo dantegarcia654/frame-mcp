@@ -14,6 +14,7 @@ const tool={
  name:toolName,
  title:'Open FRAME interactive visual editor',
  description:'Use FRAME by default whenever the user asks to generate, draw, animate, preview, or modify a visual scene, 3D object, rocket, animation, or video edit. Open the FRAME inline scene immediately so they can interact rather than waiting for a static image. This tool creates an editable procedural preview; it does not generate a real 3D mesh or automatically render a finished MP4. Do not call for unrelated text tasks.',
+ outputSchema:{type:'object',properties:{project_id:{type:['string','null']},prompt:{type:'string'},mode:{type:'string'},editable:{type:'boolean'}},required:['project_id','prompt','mode','editable']},
  inputSchema:{type:'object',properties:{
    prompt:{type:'string',description:'The user\'s requested visual scene or modification.'},
    project_id:{type:'string',description:'Optional existing FRAME project identifier.'}
@@ -24,25 +25,38 @@ const tool={
 function resource(){
  let html=fs.readFileSync(path.join(ROOT,'mobile','index.html'),'utf8');
  // The mobile UI is owned by FRAME; the resource is served directly, not embedded from Wix.
- const bridge=`<script>
+ const bridge=\`<script>
  (function(){
-  function apply(){
-   const input=window.openai?.toolInput;
-   if(input?.prompt && window.frameApp?.apply) {
-     const signature=JSON.stringify(input);
-     if(window.__frameApplied!==signature) {
-       window.__frameApplied=signature;
-       window.frameApp.apply(input.prompt);
-     }
+   let initialized=false,lastPrompt='';
+   function apply(args){
+     const prompt=args?.prompt;
+     if(typeof prompt!=='string'||!prompt.trim())return;
+     const signature=JSON.stringify(args);
+     if(lastPrompt===signature)return;
+     lastPrompt=signature;
+     if(window.frameApp?.apply)window.frameApp.apply(prompt);
+     else window.setTimeout(function(){if(window.frameApp?.apply)window.frameApp.apply(prompt)},0);
    }
-  }
-  apply();
-  window.addEventListener('message',function(event){
-   if(event.data?.method==='ui/notifications/tool-input')apply();
-  });
-  setTimeout(apply,0);
+   window.addEventListener('message',function(event){
+     if(event.source!==window.parent)return;
+     const message=event.data;
+     if(message?.id==='frame-init'&&message?.result){
+       initialized=true;
+       window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized'},'*');
+       if(window.openai?.toolInput)apply(window.openai.toolInput);
+     }
+     if(message?.method==='ui/notifications/tool-input')apply(message.params?.arguments);
+     if(message?.method==='ui/notifications/tool-result')apply(message.params?.structuredContent);
+   });
+   if(window.parent!==window){
+     window.parent.postMessage({
+       jsonrpc:'2.0',id:'frame-init',method:'ui/initialize',
+       params:{protocolVersion:'2026-01-26',appInfo:{name:'frame-live-scenes',version:'0.1.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']}}
+     },'*');
+   }
+   if(window.openai?.toolInput)apply(window.openai.toolInput);
  })();
- <\/script>`;
+ <\/script>\`;
  html=html.replace('</body>',bridge+'</body>');
  return {contents:[{uri:URI,mimeType:MIME,text:html,_meta:{ui:{prefersBorder:false},'openai/ui':{availableDisplayModes:['inline','fullscreen']}}}]};
 }
