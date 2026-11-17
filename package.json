@@ -21,7 +21,8 @@
   "scripts": {
     "start": "node bin/frame.js serve",
     "test": "node test/smoke.js",
-    "start:chatgpt": "node src/chatgpt-app.js"
+    "start:chatgpt": "node src/chatgpt-app.js",
+    "test:chatgpt": "node test/chatgpt-app-smoke.js"
   },
   "keywords": [
     "mcp",
