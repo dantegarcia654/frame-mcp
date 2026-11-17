@@ -1,5 +1,6 @@
 // Frame UI. Shows the daemon's project state live, previews the timeline in real time, and lets the human edit the same timeline.
 import { drawText, rasterText, textKey, reflowLines } from './text-draw.js';
+import { EFFECTS, drawEffect, trackAt, placeRect, mapBox, effectTime } from './effects.js';
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -86,8 +87,20 @@ async function loadPacks() {
     }
   }
 }
+// Effects: every effect Frame can draw. + adds it at the playhead on the track above the footage.
+let fxListDone = false;
+function renderEffectsList() {
+  if (fxListDone) return; fxListDone = true;
+  const box = $('#effects'); if (!box) return; $('#fxCount').textContent = Object.keys(EFFECTS).length;
+  for (const [id, fx] of Object.entries(EFFECTS)) {
+    const row = el('div', 'pkItem', `<span class="nm">${esc(fx.label)}</span><span class="dim">${fx.needs === 'cutout' ? 'cutout' : ''}</span>`); row.title = fx.about;
+    const add = el('button', '', '+'); add.title = `Add ${fx.label} at the playhead`;
+    add.onclick = () => { if (!P) return; const top = P.clips.filter((c) => c.kind === 'effect' && c.start < T + 1.5 && end(c) > T).map((c) => Number(c.track.slice(1))); post({ action: 'ops', ops: [{ op: 'add_effect', effect: id, start: Math.round(T * (P.fps || 30)) / (P.fps || 30), duration: 1.5, track: `V${Math.max(1, ...top) + 1}` }] }); };
+    row.append(add); box.append(row);
+  }
+}
 function renderBin() {
-  loadPacks();
+  loadPacks(); renderEffectsList();
   const bin = $('#bin'); bin.dataset.empty = 'Nothing imported yet.';
   const assets = Object.values(P.assets);
   $('#mediaCount').textContent = assets.length || '';
@@ -97,8 +110,15 @@ function renderBin() {
     const th = el('div', 'th');
     if (a.thumbs) { const mid = Math.floor(a.thumbs / 2); th.style.backgroundImage = `url(/thumbs/${P.id}/${a.id})`; th.style.backgroundSize = `${a.thumbs * 100}% 100%`; th.style.backgroundPosition = a.thumbs > 1 ? `${(mid / (a.thumbs - 1)) * 100}% 0` : 'center'; }
     else th.textContent = a.kind === 'audio' ? '♪' : '';
-    if (a.busy) th.append(el('div', 'busy', esc(a.busy)));
-    d.append(th, el('div', 'nm', esc(a.name)), el('div', 'mt', `${a.id} · ${a.duration ? tc(a.duration) : a.kind}${a.transcript ? ' · words' : ''}`));
+    const busy = a.busy || (a.cutting && `cutting out ${a.cutting}`) || (a.transcribing && 'transcribing');
+    if (busy) th.append(el('div', 'busy', esc(busy)));
+    d.append(th, el('div', 'nm', esc(a.name)), el('div', 'mt', `${a.id} · ${a.duration ? tc(a.duration) : a.kind}${a.transcript ? ' · words' : ''}${a.cutout ? ' · cutout' : ''}`));
+    if (a.kind === 'video' && !a.busy && !a.cutting) { // the person cutout (frame_cutout): run it from here, or see what covers it
+      const b = el('button', 'cut', a.cutout ? `Cutout ${tc(a.cutout.from)}–${tc(a.cutout.to)}` : 'Cut out person');
+      b.title = a.cutout ? `${a.cutout.engineLabel || a.cutout.engine}, ${a.cutout.quality}: person found in ${a.cutout.withPerson}/${a.cutout.frames} frames, face in ${a.cutout.withFace}. Click to make it again.` : 'Separate the person from the background on every frame of the part the timeline uses (runs on this computer). Effects like Clone row and Text behind need it.';
+      b.onclick = (e) => { e.stopPropagation(); post({ action: 'cutout', asset: a.id }); };
+      d.append(b);
+    }
     d.title = `${a.path}\n${a.width ? `${a.width}×${a.height} · ` : ''}${a.loudness ? `${a.loudness.lufs} LUFS` : ''}\nDouble-click to add at the end of the timeline`;
     d.ondblclick = () => post({ action: 'ops', ops: [{ op: 'add_clip', asset: a.id }] });
     bin.append(d);
@@ -188,7 +208,12 @@ function clipEl(raw, h) {
   const w = Math.max(3, dur(c) * pps);
   d.style.left = `${c.start * pps}px`; d.style.width = `${w}px`;
   if (c.kind === 'text') d.append(el('span', 'lb', esc(c.text.content)));
-  else {
+  else if (c.kind === 'effect') {
+    const fx = EFFECTS[c.effect?.type];
+    d.append(el('span', 'lb', esc(c.label || fx?.label || c.effect?.type)));
+    const u = P.clips.find((x) => x.track === (c.source || 'V1') && x.kind === 'video' && x.start < end(c) && end(x) > c.start), a = u && P.assets[u.asset];
+    d.append(el('span', 'fx', fx?.needs === 'cutout' && !a?.cutout ? 'NEEDS CUTOUT' : 'FX'));
+  } else {
     if (a?.thumbs) {
       const tiles = el('div', 'tiles'); const n = clamp(Math.ceil(w / (h * 0.62)), 1, 40);
       for (let k = 0; k < n; k++) {
@@ -238,7 +263,7 @@ function startDrag(e, raw) {
   if (slip && (T < raw.start || T >= end(raw))) seek(raw.start + Math.min(0.5, dur(raw) / 2)); // park the playhead in the clip so the preview shows the slip
   const edges = [0, T, ...P.clips.filter((c) => c.id !== raw.id).flatMap((c) => [c.start, end(c)])];
   const snap = (t) => { for (const s of edges) if (Math.abs(s - t) * pps < 7) return s; return t; };
-  const stretch = raw.kind === 'text' || raw.kind === 'image';
+  const stretch = raw.kind === 'text' || raw.kind === 'image' || raw.kind === 'effect';
   const move = (ev) => {
     const dx = (ev.clientX - x0) / pps; if (Math.abs(ev.clientX - x0) > 2) moved = true; if (!moved) return;
     const cur = {};
@@ -293,7 +318,7 @@ let cursorTimer;
 function focus(f) {
   const cur = $('#cursor'); let target = null;
   for (const id of f.clipIds || []) { const d = document.querySelector(`.clip[data-id="${id}"]`); if (d) { d.classList.add('touch'); target ||= d; } }
-  if ($('#follow').checked && f.t != null && !playing && !drag) { if (renderView) showRender(null); seek(f.t + 0.02); const sc = $('#scroll'); const x = f.t * pps; if (x < sc.scrollLeft || x > sc.scrollLeft + sc.clientWidth - 80) sc.scrollLeft = Math.max(0, x - sc.clientWidth / 3); }
+  if ($('#follow').checked && f.t != null && !playing && !drag) { if (renderView) showRender(null); seek(Math.min(f.t + 0.02, Math.max(0, P.duration - 1 / (P.fps || 30)))); const sc = $('#scroll'); const x = f.t * pps; if (!autoFit && (x < sc.scrollLeft || x > sc.scrollLeft + sc.clientWidth - 80)) sc.scrollLeft = Math.max(0, x - sc.clientWidth / 3); }
   const r = (target || $('#playhead')).getBoundingClientRect();
   cur.querySelector('span').textContent = f.agent || 'Claude';
   cur.style.opacity = 1; cur.style.transform = `translate(${clamp(r.left + Math.min(r.width / 2, 40), 0, innerWidth - 80)}px, ${r.top + r.height / 2}px)`;
@@ -328,7 +353,26 @@ function renderInspector() {
   const row = (label, input) => { const r = el('div', 'row'); r.append(el('label', '', label), input); box.append(r); return input; };
   const send = (props) => post({ action: 'ops', ops: [{ op: 'update_clip', id: c.id, ...props }] });
   const numIn = (v, step, on) => { const i = el('input'); i.type = 'number'; i.step = step; i.value = v ?? ''; i.onchange = () => { if (i.value !== '') on(Number(i.value)); i.blur(); }; return i; };
-  if (c.kind === 'text') {
+  if (c.kind === 'effect') {
+    const fx = EFFECTS[c.effect.type];
+    box.append(el('div', 'sec', esc(fx?.label || c.effect.type)), el('div', 'kv', `<span style="white-space:normal;line-height:1.4;padding:2px 0 4px">${esc(fx?.about || '')}</span>`));
+    if (fx?.needs === 'cutout') { const u = P.clips.find((x) => x.track === (c.source || 'V1') && x.kind === 'video' && x.start < end(c) && end(x) > c.start), ua = u && P.assets[u.asset]; box.append(el('div', 'kv', `<span>Cutout</span><span>${ua?.cutout ? 'ready' : ua ? 'needed — Cut out person in Media' : 'no footage under it'}</span>`)); }
+    row('Start', numIn(c.start, 0.01, (v) => send({ start: v })));
+    row('Duration', numIn(+dur(c).toFixed(3), 0.01, (v) => send({ duration: v })));
+    row('Reads', (() => { const i = el('input'); i.value = c.source || 'V1'; i.onchange = () => { send({ source: i.value.trim().toUpperCase() }); i.blur(); }; return i; })());
+    box.append(el('div', 'sec', 'Settings'));
+    for (const [k, s] of Object.entries(fx?.params || {})) {
+      const v = c.effect.params[k];
+      let input;
+      if (s.kind === 'number') input = numIn(v, s.step || (s.max - s.min > 20 ? 1 : 0.01), (x) => send({ params: { [k]: x } }));
+      else if (s.kind === 'choice') { input = el('select'); input.innerHTML = s.options.map((o) => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join(''); input.onchange = () => send({ params: { [k]: input.value } }); }
+      else if (s.kind === 'list') { input = el('input'); input.value = `${Array.isArray(v) ? v.length : 0} item(s), set by an op`; input.disabled = true; }
+      else { input = el('input'); input.value = v ?? ''; input.onchange = () => { send({ params: { [k]: input.value } }); input.blur(); }; }
+      input.title = s.about + (s.kind === 'number' ? ` (${s.min}–${s.max})` : ''); row(k, input);
+    }
+    box.append(el('div', 'sec', 'Layer'));
+    for (const f of FIELDS.filter((x) => ['opacity', 'fadeIn', 'fadeOut'].includes(x.key))) row(f.label, numIn(c[f.key] ?? (f.key === 'opacity' ? 1 : 0), f.step, (v) => send({ [f.key]: v })));
+  } else if (c.kind === 'text') {
     box.append(el('div', 'sec', 'Text — Enter saves · ⇧Enter new line · Esc cancels · double-click the caption to edit in place'));
     const ta = el('textarea'); ta.rows = 3; ta.value = c.text.content; ta.id = 'textField';
     let cancelled = false; const commit = () => { if (!cancelled && ta.value !== c.text.content && ta.value.trim()) send({ text: ta.value }); cancelled = false; };
@@ -430,13 +474,14 @@ function syncMedia(m, c, t, active) {
   if (m.readyState >= 1 && !m.seeking && drift > (playing ? 0.3 : 0.02)) m.currentTime = want;
   if (playing && m.paused) m.play().catch(() => {}); else if (!playing && !m.paused) m.pause();
 }
-function drawVisual(src, sw0, sh0, c, t) {
-  const k = cv.width / P.width;
+// Draws a clip's picture with its placement, grade, key, opacity and fade — onto the viewer, or onto an effect's input canvas.
+function drawVisual(src, sw0, sh0, c, t, ctx = cv.getContext('2d'), Wc = cv.width, Hc = cv.height, { grade = true, key = true } = {}) {
+  const k = Wc / P.width;
   const s = (c.fit === 'contain' ? Math.min(P.width / sw0, P.height / sh0) : Math.max(P.width / sw0, P.height / sh0)) * (c.scale || 1);
-  const w = sw0 * s * k, h = sh0 * s * k, x = (cv.width - w) / 2 + (c.x || 0) * cv.width, y = (cv.height - h) / 2 + (c.y || 0) * cv.height;
-  const g = c.grade; const filter = g ? `brightness(${g.brightness ?? 1}) contrast(${g.contrast ?? 1}) saturate(${g.saturation ?? 1})` : 'none';
+  const w = sw0 * s * k, h = sh0 * s * k, x = (Wc - w) / 2 + (c.x || 0) * Wc, y = (Hc - h) / 2 + (c.y || 0) * Hc;
+  const g = grade && c.grade; const filter = g ? `brightness(${g.brightness ?? 1}) contrast(${g.contrast ?? 1}) saturate(${g.saturation ?? 1})` : 'none';
   ctx.globalAlpha = clamp((c.opacity ?? 1) * fadeK(c, t), 0, 1);
-  if (c.key) {
+  if (key && c.key) {
     const kw = Math.max(2, Math.min(Math.round(w), 540)), kh = Math.max(2, Math.round(kw * (h / w)));
     if (keyCv.width !== kw || keyCv.height !== kh) { keyCv.width = kw; keyCv.height = kh; }
     keyCtx.filter = filter; keyCtx.clearRect(0, 0, kw, kh); keyCtx.drawImage(src, 0, 0, kw, kh);
@@ -532,27 +577,101 @@ function closeTextEditor(save) {
     if (h) { e.preventDefault(); if (playing) togglePlay(); select(h.id); openTextEditor(h.id); }
   });
 })();
+// ───────────────────────── effect clips in the preview
+// The same ui/effects.js that draws the exported frames, fed with what the viewer has: the picture just drawn on the
+// effect's source track, the cutout video played in step with it, and the face/person track.
+const under = {};                 // track -> the picture drawn on it this frame
+const mattes = new Map();         // asset id -> <video> of its cutout
+const trackData = new Map();      // asset/version -> cutout track JSON
+const fxCv = { base: document.createElement('canvas'), matte: document.createElement('canvas'), layer: document.createElement('canvas'), plate: document.createElement('canvas') };
+let fxApprox = false, matteShown = null;
+const makeCanvas = (w, h) => { const e = document.createElement('canvas'); e.width = w; e.height = h; return e; };
+function matteEl(a) {
+  const src = `/matte/${P.id}/${a.id}?v=${a.cutout.version}`;
+  let m = mattes.get(a.id);
+  if (!m) { m = document.createElement('video'); m.muted = true; m.preload = 'auto'; m.playsInline = true; mattes.set(a.id, m); }
+  if (m.dataset.src !== src) { m.dataset.src = src; m.src = src; }
+  m.used = true; return m;
+}
+function trackFor(a) {
+  const k = `${P.id}/${a.id}/${a.cutout.version}`;
+  if (!trackData.has(k)) { trackData.set(k, null); fetch(`/track/${P.id}/${a.id}?v=${a.cutout.version}`).then((r) => r.json()).then((j) => trackData.set(k, j)).catch(() => {}); }
+  return trackData.get(k);
+}
+function syncMatte(m, want, rate) {
+  if (m.readyState < 1) return;
+  want = clamp(want, 0, Math.max(0, (m.duration || 1e9) - 0.001));
+  if (playing) { m.playbackRate = rate; if (m.paused) m.play().catch(() => {}); if (!m.seeking && Math.abs(m.currentTime - want) > 0.15) m.currentTime = want; }
+  else { if (!m.paused) m.pause(); if (!m.seeking && Math.abs(m.currentTime - want) > 0.5 / (P.fps || 30)) m.currentTime = want; }
+}
+function drawEffectClip(c) {
+  const fx = EFFECTS[c.effect?.type]; if (!fx) return;
+  const W = cv.width, H = cv.height;
+  for (const k in fxCv) if (fxCv[k].width !== W || fxCv[k].height !== H) { fxCv[k].width = W; fxCv[k].height = H; matteShown = null; }
+  const u = under[c.source || 'V1'], bg = fxCv.base.getContext('2d');
+  bg.globalAlpha = 1; bg.fillStyle = '#000'; bg.fillRect(0, 0, W, H);
+  if (u) drawVisual(u.src, u.sw, u.sh, u.clip, T, bg, W, H);
+  const a = u && P.assets[u.clip.asset];
+  let matte = null, face = null, person = null, note = null;
+  if ((fx.needs === 'cutout' || fx.uses === 'cutout') && a?.cutout && u.clip.kind === 'video') {
+    const s = u.clip.in + (T - u.clip.start) * u.clip.speed, m = matteEl(a);
+    syncMatte(m, s - a.cutout.from, u.clip.speed);
+    const mg = fxCv.matte.getContext('2d');
+    if (m.readyState >= 2) { mg.globalAlpha = 1; mg.fillStyle = '#000'; mg.fillRect(0, 0, W, H); drawVisual(m, a.width, a.height, u.clip, T, mg, W, H, { grade: false, key: false }); matteShown = a.id; }
+    if (matteShown === a.id) matte = fxCv.matte; // while the cutout video seeks, keep its last frame
+    const tr = trackFor(a);
+    if (tr) { const b = trackAt(tr, s), r = placeRect(a.width, a.height, u.clip, W, H); face = mapBox(b.face, r); person = mapBox(b.person, r); }
+    if (playing) fxApprox = true;
+  } else if (fx.needs === 'cutout') note = a ? `${fx.label} needs a cutout of ${a.name} — use “Cut out person” in Media` : `${fx.label}: no footage under it on ${c.source || 'V1'}`;
+  let plate = null;
+  const pa = c.effect.params?.plate && P.assets[c.effect.params.plate];
+  if (fx.params.plate && u) { // the empty-set shot, placed exactly like the footage it replaces
+    if (!pa) note = `${fx.label} needs a plate: a shot of the empty set from the same angle`;
+    else {
+      let src = images.get(`plate:${pa.id}`), sw = pa.width, sh = pa.height;
+      if (!src) { if (pa.kind === 'image') { src = new Image(); src.src = `/media/${P.id}/${pa.id}`; } else { src = document.createElement('video'); src.muted = true; src.preload = 'auto'; src.src = `/media/${P.id}/${pa.id}`; src.addEventListener('loadedmetadata', () => { src.currentTime = (src.duration || 0) / 2; }, { once: true }); } images.set(`plate:${pa.id}`, src); }
+      const ready = pa.kind === 'image' ? src.complete && src.naturalWidth : src.readyState >= 2;
+      if (ready) { const pg = fxCv.plate.getContext('2d'); pg.globalAlpha = 1; pg.fillStyle = '#000'; pg.fillRect(0, 0, W, H); drawVisual(src, sw, sh, { ...u.clip, opacity: 1, fadeIn: 0, fadeOut: 0 }, T, pg, W, H, { key: false }); plate = fxCv.plate; }
+    }
+  }
+  const lg = fxCv.layer.getContext('2d'); lg.setTransform(1, 0, 0, 1, 0, 0); lg.globalAlpha = 1; lg.clearRect(0, 0, W, H);
+  const { t, d } = effectTime(c, T);
+  try { if (fx.params.plate && !plate) note ||= `${fx.label}: loading its plate…`; else drawEffect(lg, c, { W, H, t, d, base: fxCv.base, matte, plate, face, person, unit: P.width / W, make: makeCanvas }); }
+  catch (e) { note = `${fx.label} could not be drawn: ${e.message}`; }
+  ctx.globalAlpha = clamp((c.opacity ?? 1) * fadeK(c, T), 0, 1); ctx.drawImage(fxCv.layer, 0, 0); ctx.globalAlpha = 1;
+  if (note) { const fs = Math.max(11, H * 0.016); ctx.font = `600 ${fs}px -apple-system, sans-serif`; const tw = ctx.measureText(note).width; ctx.fillStyle = 'rgba(0,0,0,.8)'; ctx.fillRect(8, 8, tw + fs, fs * 1.8); ctx.fillStyle = '#fff'; ctx.textBaseline = 'middle'; ctx.fillText(note, 8 + fs / 2, 8 + fs * 0.9); }
+}
 function tick() {
   if (!P || renderView) return;
   sizeViewer();
-  if (playing) { T = playT0 + (performance.now() - playW0) / 1000; if (T >= P.duration) { T = P.duration; playing = false; $('#play').textContent = '▶'; } placePlayhead(); const sc = $('#scroll'), x = T * pps; if (x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - 60; }
+  if (playing) { T = playT0 + (performance.now() - playW0) / 1000; if (T >= P.duration) { T = P.duration; playing = false; $('#play').textContent = '▶'; } placePlayhead(); const sc = $('#scroll'), x = T * pps; if (!autoFit && x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - 60; }
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
-  textHits = []; selHit = null;
+  textHits = []; selHit = null; fxApprox = false;
   for (const s of slots.values()) s.used = false;
+  for (const k of Object.keys(under)) delete under[k];
+  for (const m of mattes.values()) m.used = false;
+  let stalled = false;
   const order = (t) => (t[0] === 'A' ? -1 : t[0] === 'T' ? 1000 : 0) + Number(t.slice(1));
   for (const track of [...P.tracks].sort((a, b) => order(a) - order(b))) {
     const list = P.clips.filter((c) => c.track === track).map(view).sort((a, b) => a.start - b.start);
     list.forEach((c, i) => {
-      const active = T >= c.start && T < end(c) - 0.0005, soon = !active && c.start > T && c.start - T < 1.5;
+      const active = T >= c.start && T < end(c) - 0.0005, soon = !active && c.start > T && c.start - T < 3;
       if (c.kind === 'text') { if (active) { ctx.globalAlpha = clamp((c.opacity ?? 1) * fadeK(c, T), 0, 1); const hit = drawText(ctx, c, cv.width, cv.height); ctx.globalAlpha = 1; textHits.push({ id: c.id, ...hit }); if (c.id === sel) drawSelection(hit, c.id); } return; }
-      if (c.kind === 'image') { if (!active) return; let im = images.get(c.asset); if (!im) { im = new Image(); im.src = `/media/${P.id}/${c.asset}`; images.set(c.asset, im); } if (im.complete && im.naturalWidth) drawVisual(im, im.naturalWidth, im.naturalHeight, c, T); return; }
+      if (c.kind === 'effect') { if (active) drawEffectClip(c); return; }
+      if (c.kind === 'image') { if (!active) return; let im = images.get(c.asset); if (!im) { im = new Image(); im.src = `/media/${P.id}/${c.asset}`; images.set(c.asset, im); } if (im.complete && im.naturalWidth) { drawVisual(im, im.naturalWidth, im.naturalHeight, c, T); under[c.track] = { src: im, sw: im.naturalWidth, sh: im.naturalHeight, clip: c }; } return; }
       if (!active && !soon) return;
       const m = mediaFor(c, i); syncMedia(m, c, T, active);
-      if (active && c.kind === 'video' && m.readyState >= 2) { const a = P.assets[c.asset]; drawVisual(m, a.width, a.height, c, T); }
+      if (active && c.kind === 'video') { if (m.readyState >= 2 && !m.seeking) { const a = P.assets[c.asset]; drawVisual(m, a.width, a.height, c, T); under[c.track] = { src: m, sw: a.width, sh: a.height, clip: c }; } else stalled = true; }
     });
   }
+  // A video that is still seeking/loading must not flash black: hold the last complete frame instead.
+  if (stalled && lastGood.width) ctx.drawImage(lastGood, 0, 0, cv.width, cv.height);
+  else if (!stalled) { if (lastGood.width !== cv.width || lastGood.height !== cv.height) { lastGood.width = cv.width; lastGood.height = cv.height; } lastGood.getContext('2d').drawImage(cv, 0, 0); }
   for (const s of slots.values()) if (!s.used && !s.el.paused) s.el.pause();
+  for (const m of mattes.values()) if (!m.used && !m.paused) m.pause();
+  if (!drag) { const vm = $('#viewMode'), want = fxApprox ? 'Live preview · cutout effects are approximate while playing — pause, frame_view or render for exact frames' : 'Live preview'; if (vm.textContent !== want && /^Live preview/.test(vm.textContent)) vm.textContent = want; }
 }
+const lastGood = document.createElement('canvas');
 function showRender(id) {
   const v = $('#renderPlayer'); renderView = id;
   if (id) { playing = false; $('#play').textContent = '▶'; for (const s of slots.values()) s.el.pause(); v.src = `/render/${P.id}/${id}?v=${Date.now()}`; v.hidden = false; cv.style.visibility = 'hidden'; sizeViewer(); v.play().catch(() => {}); }

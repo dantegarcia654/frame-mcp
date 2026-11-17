@@ -42,14 +42,16 @@ if (cmd === 'serve') {
   // Windows has no python3 (that name opens the Microsoft Store); it is python or py there.
   const wh = ['python3', 'python', 'py'].some((py) => spawnSync(py, ['-c', 'import whisper'], { encoding: 'utf8' }).status === 0);
   let ping = null; try { ping = await (await fetch(`${BASE}/api/ping`)).json(); } catch {}
-  console.log(`Frame ${VERSION}\nnode     ${process.version}\nffmpeg   ${ff.status === 0 ? ff.stdout.split('\n')[0] : 'MISSING — install ffmpeg (macOS: brew install ffmpeg · Windows: winget install Gyan.FFmpeg)'}\nwhisper  ${wh ?'installed (transcripts + captions available)' : 'not installed (optional: pip install -U openai-whisper)'}\nservice  ${ping ? `running at ${BASE}, ${ping.clients} window(s) open` : 'not running (starts on demand)'}\ndata     ${HOME}`);
+  const { findChrome } = await import('../src/text.js'), { cutoutEngine } = await import('../src/cutout.js');
+  const chrome = findChrome(), cut = await cutoutEngine();
+  console.log(`Frame ${VERSION}\nnode     ${process.version}\nffmpeg   ${ff.status === 0 ? ff.stdout.split('\n')[0] : 'MISSING — install ffmpeg (macOS: brew install ffmpeg · Windows: winget install Gyan.FFmpeg)'}\nwhisper  ${wh ?'installed (transcripts + captions available)' : 'not installed (optional: pip install -U openai-whisper)'}\nchrome   ${chrome ? `${chrome} (draws captions and effects)` : 'not found — captions and effect clips need Chrome, Chromium, Edge or Brave'}\ncutout   ${cut.id ? cut.label : `not available: ${cut.reason}`}\nservice  ${ping ? `running at ${BASE}, ${ping.clients} window(s) open` : 'not running (starts on demand)'}\ndata     ${HOME}`);
 } else {
   console.log(`Frame ${VERSION} — the live editing room for Claude
 
   frame mcp       run as an MCP server over stdio (what your MCP client launches)
   frame install   register Frame with Claude Code
   frame open      open the Frame window
-  frame doctor    check ffmpeg / whisper / service
+  frame doctor    check ffmpeg / whisper / chrome / cutout / service
   frame call <tool> '<json>'   call a tool from the shell
   frame serve     run the local service in the foreground
   frame stop      stop the local service`);

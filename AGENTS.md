@@ -19,7 +19,7 @@ Requirements: Node 18+, `ffmpeg` and `ffprobe` on PATH. Optional: `pip install -
 git clone https://github.com/dantegarcia654/frame-mcp.git
 cd frame-mcp
 node bin/frame.js doctor     # checks node, ffmpeg, whisper
-node test/smoke.js           # 37 end-to-end checks on a scratch instance, about 30 s
+node test/smoke.js           # 48 end-to-end checks on a scratch instance, about a minute
 ```
 
 The smoke test generates its own test video, starts a private copy of the service on port 4791 with a temporary data folder, and cleans up. It does not open a browser and does not touch `~/.frame`.
@@ -49,9 +49,10 @@ node bin/frame.js call frame_render '{"quality":"draft"}'
 
 1. The whole product is about 2,000 lines in `src/` (service) and `ui/` (window). No build step: edit a file, restart the service (`node bin/frame.js stop`; it restarts on the next call), reload the window.
 2. A new timeline operation is one `case` in `applyOp` in `src/project.js` plus one line in the `frame_edit` description in `src/tools.js`. The UI needs no change unless the op adds a new clip property.
-3. A new clip property that affects pixels or sound must be implemented twice: in `src/render.js` (ffmpeg, the truth) and in `ui/app.js` (live preview). If they disagree, the render is right and the preview must be fixed or labelled.
-4. Run `node test/smoke.js` before committing. Add a check there for anything you add.
-5. Bump `VERSION` in `src/util.js` and `version` in `package.json` together. The MCP bridge replaces a running service whose version differs.
+3. A new effect is one entry in `EFFECTS` in `ui/effects.js` (label, about, needs, settings with ranges, `draw`). The window, `frame_effects`, `frame_view` and the render all pick it up from there; add a smoke check.
+4. A new clip property that affects pixels or sound must be implemented twice: in `src/render.js` (ffmpeg, the truth) and in `ui/app.js` (live preview). If they disagree, the render is right and the preview must be fixed or labelled.
+5. Run `node test/smoke.js` before committing. Add a check there for anything you add.
+6. Bump `VERSION` in `src/util.js` and `version` in `package.json` together. The MCP bridge replaces a running service whose version differs.
 
 ## Rules this project holds itself to
 

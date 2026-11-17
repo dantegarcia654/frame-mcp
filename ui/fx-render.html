@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Frame · drawing effects</title>
+<!-- Opened by the service in headless Chrome (src/effects.js). Draws effect frames with ui/effects.js — the same code the
+     window previews with — and posts each frame back. It never runs in the user's own browser. -->
+<script type="module">
+import { drawEffect } from '/effects.js';
+const id = new URLSearchParams(location.search).get('job');
+const api = (p, body) => fetch(`/api/fxjob/${id}${p}`, { method: 'POST', body });
+const load = async (name) => { if (!name) return null; const r = await fetch(`/fxin/${id}/${name}`); if (!r.ok) throw new Error(`input ${name} is missing`); return createImageBitmap(await r.blob()); };
+const make = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+try {
+  const spec = await (await fetch(`/api/fxjob/${id}`)).json();
+  if (spec.error) throw new Error(spec.error);
+  let pending = null; const plates = {};
+  for (const fr of spec.frames) {
+    const [base, matte] = await Promise.all([load(fr.base), load(fr.matte)]);
+    const plate = fr.plate ? (plates[fr.plate] ||= await load(fr.plate)) : null;
+    const cv = make(spec.W, spec.H), g = cv.getContext('2d');
+    // matteAlpha: these cutout frames carry the person in their alpha channel (src/effects.js writes them that way).
+    drawEffect(g, fr.clip, { W: spec.W, H: spec.H, t: fr.t, d: fr.d, base, matte, matteAlpha: true, plate, face: fr.face, person: fr.person, unit: 1, make });
+    base?.close?.(); matte?.close?.();
+    const blob = await new Promise((r) => cv.toBlob(r, fr.ext === 'jpg' ? 'image/jpeg' : 'image/png', 0.95));
+    await pending; // one upload in flight while the next frame draws
+    pending = api(`/frame/${fr.key}`, blob).then(async (r) => { if (!r.ok) throw new Error(`upload of ${fr.key} refused (${r.status}: ${(await r.text()).slice(0, 300)})`); });
+  }
+  await pending;
+  await api('/done');
+} catch (e) {
+  await api('/error', String(e && e.stack || e));
+}
+</script>

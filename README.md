@@ -25,6 +25,8 @@ Frame is an MCP server. It does not add a new AI or a new kind of video; it give
 - **Nothing hidden** — work Claude does outside the timeline (a script, an ffmpeg command, an AI generation) is logged in a Process panel with the exact code.
 - **Measured, not guessed** — loudness, silences, durations and render results come from ffmpeg and are reported as numbers.
 - **Camera Move (v1.1, prototype)** — `frame_camera_move` turns a still into a push-in, pull-out, orbit, parallax or dolly-zoom clip using a local depth model (Depth-Anything-V2-Small). It is a 2.5D parallax move, not a true 3D world. Needs python3 with `torch transformers opencv-python pillow`.
+- **Effect clips and the person cutout (1.4)** — eleven effects Frame draws itself: clone row, text behind the person, text orbiting the head, rack focus, code body, letter window, tracking box, impact frame, comment drop, blow away (needs a shot of the empty set) and agent swarm. `frame_cutout` separates the person from the background on every frame on your computer (Apple Vision on macOS, rembg elsewhere), and starts by itself at import. Each effect is a clip you can see, change, move and undo; the preview, `frame_view` and the render run the same drawing code.
+- **Effects from what you say (1.4)** — `add_effects_at_words` places each effect on the word where the speaker names it ("…clone row…"), from the transcript. `add_agent_swarm` draws the agents that made the edit over the video, each replaying its own logged steps (the word it heard, the clip it placed, the cutout it read); nothing in that overlay is made up.
 - **Black and white.**
 
 ## Requirements
@@ -87,8 +89,10 @@ Projects live in `~/.frame`. Renders go to `~/Movies/Frame` (`~/Videos/Frame` on
 | `frame_transcribe` | Word-level transcript (local Whisper), or accepts supplied words. |
 | `frame_note` | Shows Claude's thinking and decisions in the feed. |
 | `frame_cut_silence` | One-call dead-air removal. Adaptive to each clip's own noise floor, `natural`/`tight`/`aggressive` styles, `dry_run` preview. |
-| `frame_edit` | Timeline operations, applied live: add, keep ranges, trim, split, move, delete, cut range, remove silences, text, captions, grade, chroma key, scale/position, speed, volume, fades, slip. |
+| `frame_edit` | Timeline operations, applied live: add, keep ranges, trim, split, move, delete, cut range, remove silences, text, captions, effects, grade, chroma key, scale/position, speed, volume, fades, slip. |
 | `frame_step` | Logs work done outside Frame with its exact code and imports the outputs. |
+| `frame_cutout` | Separates the person from the background on every frame (on your computer) and reports how many frames contain a person and a face. |
+| `frame_effects` | Lists the effects, their settings and ranges, and which footage already has a cutout. |
 | `frame_view` | Returns composited frames (or raw source frames) so Claude can look at its work. |
 | `frame_state` | Re-reads the timeline and collects your changes and messages. |
 | `frame_profile` | Shows or lists style profiles: your editing rules, shared by every AI and every copy of Frame. |
@@ -98,7 +102,7 @@ Projects live in `~/.frame`. Renders go to `~/Movies/Frame` (`~/Videos/Frame` on
 
 ## Honest limits (v1.0)
 
-- Effects are the ones listed above. No keyframed animation, no motion tracking, no transitions beyond fades, no generative effects built in. Claude can still do those elsewhere and bring the result in through `frame_step`.
+- Effects are the ones listed above. Effect clips animate themselves, but ordinary clips have no keyframes; there is no general motion tracking (effects follow the face and person boxes from the cutout), no transitions beyond fades, and no generative effects built in. Claude can still do those elsewhere and bring the result in through `frame_step`.
 - The live preview approximates chroma key and plays volume above 100% at 100%; rendered frames and the export are exact.
 - Text is drawn by the Frame window, or, when no window is open, by a headless Chromium-based browser (Chrome, Chromium, Edge or Brave; set `FRAME_CHROME` to choose one). Without either, a render with text refuses rather than export missing captions.
 - Your message reaches Claude at its next tool call, not mid-thought. Pause stops further edits; it cannot interrupt a render already running.

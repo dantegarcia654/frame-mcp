@@ -210,6 +210,55 @@ try {
   r = await call('frame_edit', { ops: [{ op: 'update_clip', id: lid, text: 'one two\nthree', style: { size: 0.07, maxWidth: 0.5 } }] });
   const stored = projOf(apid).clips.find((c) => c.id === lid).text;
   ok('a reflow is stored through update_clip', /✓ [\s\S]*size 0\.055 → 0\.07 · maxWidth 0\.84 → 0\.5/.test(r.text) && stored.content === 'one two\nthree' && stored.size === 0.07 && stored.maxWidth === 0.5, r.text.replace(/\n/g, '⏎').slice(0, 120));
+
+  // ── 1.4 effect clips and the person cutout: drawn by ui/effects.js, never shipped stale or wrong.
+  const g2 = buildGraph({ width: 100, height: 100, fps: 30, assets: {}, clips: [{ id: 'e1', kind: 'effect', track: 'V2', start: 0, in: 0, out: 1, speed: 1, effect: { type: 'letter_window', params: {} } }] }, { effects: {}, assetPath: () => '' });
+  ok('an effect with no drawn frames is never composited', g2.inputs.length === 0 && /has not been drawn/.test(g2.warnings.join(' ')));
+  await call('frame_start', { name: 'effects', aspect: '9:16' });
+  // prepare: false keeps the cutout from starting at import, so the "needs a cutout" path below is exercised.
+  await call('frame_import', { paths: [clip], prepare: false });
+  await call('frame_edit', { ops: [{ op: 'add_clip', asset: 'a1', in: 0, out: 3 }] });
+  r = await call('frame_edit', { ops: [{ op: 'add_effect', effect: 'nope', start: 0 }, { op: 'add_effect', effect: 'letter_window', start: 0.5, duration: 1, params: { weight: 2000 } },
+    { op: 'add_effect', effect: 'letter_window', start: 0.51, duration: 1, params: { text: 'HI', bg: '#ff0000' } }, { op: 'add_effect', effect: 'clone_row', start: 2, duration: 0.5, track: 'V1' }] });
+  const fxId = r.text.match(/3\. ✓ .*\[(c_\w+)\]/)?.[1];
+  ok('add_effect rejects unknown effects, out-of-range settings and its own source track; snaps to whole frames', /1\. ✗ add_effect: add_effect needs effect/.test(r.text) && /2\. ✗ .*weight must be a number from 100 to 900/.test(r.text)
+    && /3\. ✓ Effect Letter window effect on V2 at 00:00\.50/.test(r.text) && /4\. ✗ .*cannot sit on the track it reads/.test(r.text), r.text.split('\n').slice(0, 4).join(' | ').slice(0, 260));
+  r = await call('frame_effects', {});
+  ok('frame_effects lists every effect with its settings', /clone_row — Clone row \(cue words: [^)]*\) \[needs a cutout/.test(r.text) && /letter_window — Letter window \(cue words: "letter window"/.test(r.text) && /settings: text \(text, default "FRAME"\)/.test(r.text), r.text.match(/• letter_window.*/)?.[0]?.slice(0, 160));
+  if (findChrome()) {
+    const look = async (t) => { const v = await call('frame_view', { t }); return { v, img: v.content.find((c) => c.type === 'image')?.data }; };
+    let { v, img } = await look(1);
+    ok('an effect clip is drawn in headless Chrome with ui/effects.js and composited', !!img && redPixels(img) > 20000 && !/Effect not in these frames/.test(v.text), img ? `red pixels ${redPixels(img)}` : v.text.match(/⚠.*/)?.[0]);
+    r = await call('frame_edit', { ops: [{ op: 'update_clip', id: fxId, params: { bg: '#ffffff' } }] });
+    ({ v, img } = await look(1));
+    ok('a changed effect is redrawn, never shipped from its old frames', /bg #ff0000 → #ffffff/.test(r.text) && !!img && whitePixels(img) > 20000 && redPixels(img) < 500, img ? `white ${whitePixels(img)}, red ${redPixels(img)}` : 'no image');
+    await call('frame_edit', { ops: [{ op: 'add_effect', effect: 'clone_row', start: 2, duration: 0.5 }] });
+    ({ v } = await look(2.2));
+    ok('an effect that needs a cutout says so instead of drawing wrong', /Effect not in these frames: .*needs a cutout of clip\.mp4/.test(v.text), v.text.match(/⚠.*/)?.[0]);
+    r = await call('frame_render', { quality: 'draft', output_dir: path.join(tmp, 'out3') });
+    ok('render refuses while an effect cannot be drawn', r.isError && /Not rendered: .*needs a cutout/.test(r.text), r.text.slice(0, 160));
+    const { cutoutEngine } = await import('../src/cutout.js');
+    if ((await cutoutEngine()).id) {
+      r = await call('frame_cutout', { asset: 'a1', from: 0, to: 1, quality: 'fast' });
+      ok('frame_cutout runs every frame and reports what it measured', /Cut out the person in a1 .*source 0–1s: 30 frames/.test(r.text) && /person in \d+\/30 frames/.test(r.text), r.text.split('\n').slice(0, 2).join(' | ').slice(0, 220));
+      r = await call('frame_effects', {});
+      ok('frame_effects names the part of the footage a cutout does not cover', /covers source 0–1s but this effect shows 2–2\.5s/.test(r.text), r.text.match(/⚠.*/)?.[0]);
+    } else console.log('- skipped cutout checks: no cutout engine on this machine');
+    r = await call('frame_render', { quality: 'draft', allow_missing_effects: true, output_dir: path.join(tmp, 'out3') });
+    const fxFile = r.text.match(/Rendered: (.+)/)?.[1];
+    const mid = fxFile && path.join(tmp, 'fxmid.jpg'); if (mid) spawnSync('ffmpeg', ['-v', 'error', '-y', '-ss', '1', '-i', fxFile, '-frames:v', '1', mid]);
+    ok('a render draws the effect frames it needs and names what it left out', !!fxFile && /Drew \d+ new effect frame/.test(r.text) && /left out/.test(r.text) && whitePixels(fs.readFileSync(mid).toString('base64')) > 5000, r.text.split('\n').slice(0, 3).join(' | ').slice(0, 220));
+  } else console.log('- skipped effect drawing checks: no Chrome/Chromium found');
+  {
+    const { cutoutEngine } = await import('../src/cutout.js');
+    if ((await cutoutEngine()).id) {
+      await call('frame_start', { name: 'prepare', aspect: '9:16' });
+      r = await call('frame_import', { paths: [clip] });
+      const started = /Preparing in the background: .*person cutout of a1/.test(r.text);
+      r = await call('frame_cutout', { asset: 'a1' });
+      ok('import starts the person cutout in the background and frame_cutout waits for it', started && /Cut out the person in a1|a1 already has a cutout/.test(r.text), r.text.split('\n')[0].slice(0, 200));
+    }
+  }
 } finally {
   daemon.kill(); fs.rmSync(tmp, { recursive: true, force: true });
 }
