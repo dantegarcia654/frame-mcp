@@ -22,6 +22,9 @@ try{
  assert.equal(r.result.contents[0].mimeType,'text/html;profile=mcp-app');
  assert.match(r.result.contents[0].text,/window\.frameApp=/);
  assert.match(r.result.contents[0].text,/Statue of Liberty/);
+ assert.match(r.result.contents[0].text,/FRAME-owned editor/);
+ assert.match(r.result.contents[0].text,/not invoked by ChatGPT/);
+ assert.match(r.result.contents[0].text,/Source code/);
  r=await call('tools/call',{name:t.name,arguments:{prompt:'3D rocket in NYC with blue wings'}});
  assert.equal(r.result.structuredContent.editable,true);
  r=await call('tools/call',{name:t.name,arguments:{prompt:''}});
