@@ -13,6 +13,8 @@ User: "Generate a 3D rocket flying past the Statue of Liberty."
 
 **Important boundary:** The host controls tool discovery and auto-invocation. Tool descriptions can improve routing, but an MCP server cannot force automatic activation for every prompt. Do not market this guarantee until an actual installed integration is tested with representative users.
 
+See [the reproducible host test runbook](CHATGPT-HOST-TEST.md) for private HTTPS tunnel setup, the public HTTPS/OAuth gate, the physical-iPhone demo and separate evidence criteria.
+
 ## Run development bridge
 
 ```bash
@@ -21,12 +23,12 @@ npm run start:chatgpt
 npm run test:chatgpt
 ```
 
-Requires Node 18+. The default listener is intentionally loopback-only. ChatGPT cannot reach your local computer at `127.0.0.1` from its cloud. To connect as a ChatGPT developer app, deploy to a trusted HTTPS origin with the appropriate app registration, authentication, tool permissions, and the platform's review requirements. Do not expose an unprotected development endpoint to the public Internet. Use `FRAME_APP_HOST`, `FRAME_APP_PORT`, `FRAME_APP_TOKEN` and `FRAME_APP_ALLOWED_ORIGINS` to configure an isolated development deployment; validate them against the production hosting and auth model before launch.
+Requires Node 18+. The default listener is intentionally loopback-only. ChatGPT cannot reach your local computer at `127.0.0.1` from its cloud. To connect as a ChatGPT developer app, deploy to a trusted HTTPS origin with the appropriate app registration, authentication, tool permissions, and the platform's review requirements. Do not expose an unprotected development endpoint to the public Internet. The bridge now refuses non-loopback binding even with `FRAME_APP_TOKEN`. That static secret is only a local guard, not ChatGPT OAuth. Use the private stdio tunnel entry point (`node src/chatgpt-app.js --stdio`) for the first host test, or a verified OAuth HTTPS gateway; see the runbook.
 
 ## Implemented now
 
 - Tool declaration with `_meta.ui.resourceUri` and `openai/outputTemplate`
-- `ui://frame/live-scenes/v1.html` interactive editor resource, served from FRAME-owned source
+- `ui://frame/live-scenes/v2.html` interactive editor resource, served from FRAME-owned source
 - JSON-RPC `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`
 - Local procedural scene editor with timeline, instant direct controls, browser persistence and experimental WebM recording
 - Browser widget accepts tool prompt through `window.openai.toolInput` where available

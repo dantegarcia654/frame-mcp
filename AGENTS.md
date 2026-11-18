@@ -43,7 +43,7 @@ node bin/frame.js call frame_render '{"quality":"draft"}'
 - **Claude Code:** `node bin/frame.js install`
 - **Codex CLI:** `codex mcp add frame -- node /absolute/path/to/frame-mcp/bin/frame.js mcp`
 - **Any stdio MCP client:** command `node`, args `["/absolute/path/to/frame-mcp/bin/frame.js", "mcp"]`
-- **ChatGPT in the browser:** not directly. ChatGPT web only reaches MCP servers over the network, and Frame speaks stdio and binds to localhost. It would need an HTTP MCP endpoint in front of it. That is not built; see the roadmap. Until then, use Codex, or drive it with `frame call`.
+- **ChatGPT in the browser:** not directly. ChatGPT web only reaches MCP servers over the network, and Frame speaks stdio and binds to localhost. It would need an HTTP MCP endpoint in front of it. PR #10 adds a separate procedural-widget scaffold and private stdio tunnel entry point; see [docs/CHATGPT-HOST-TEST.md](docs/CHATGPT-HOST-TEST.md). It is not wired to this video engine. Until host testing passes, use Codex or drive the engine with `frame call`.
 
 ## Change it
 

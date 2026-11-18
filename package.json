@@ -1,6 +1,6 @@
 {
   "name": "frame-mcp",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Frame — the live editing room for Claude. Every cut, grade, caption and render Claude makes shows up on a real timeline you can watch, steer and edit by hand.",
   "type": "module",
   "bin": {
@@ -22,7 +22,7 @@
     "start": "node bin/frame.js serve",
     "test": "node test/smoke.js",
     "start:chatgpt": "node src/chatgpt-app.js",
-    "test:chatgpt": "node test/chatgpt-app-smoke.js"
+    "test:chatgpt": "node test/chatgpt-app-smoke.js && node test/chatgpt-widget-contract.js"
   },
   "keywords": [
     "mcp",
