@@ -1,4 +1,5 @@
 // Turns the timeline into one ffmpeg command. The same graph renders the final MP4 and the still frames Claude looks at.
+import { moveAt, moveExpr } from '../ui/clip-move.js';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { round } from './util.js';
@@ -79,6 +80,10 @@ export function buildGraph(p, o) {
       const s = (c.fit === 'contain' ? Math.min(W / a.width, H / a.height) : Math.max(W / a.width, H / a.height)) * (c.scale || 1);
       const sw = even(a.width * s), sh = even(a.height * s);
       X = Math.round((W - sw) / 2 + (c.x || 0) * W); Y = Math.round((H - sh) / 2 + (c.y || 0) * H);
+      if (c.move?.length) { // keyframed position: a still takes the offset at its instant, a range moves per frame
+        if (o.still) { const m = moveAt(c, t0 - c.start); X = Math.round(X + m.x * W); Y = Math.round(Y + m.y * H); }
+        else { X = `'${moveExpr(c, 'x', X, W, c.start - t0)}'`; Y = `'${moveExpr(c, 'y', Y, H, c.start - t0)}'`; }
+      }
       if (c.kind === 'image') idx = addInput(['-loop', '1', '-framerate', String(FPS), '-t', f(Math.max(le - ls, 1 / FPS)), '-i', file]);
       else {
         idx = addInput(['-ss', f(srcIn), '-t', f(Math.max(srcDur, 1 / FPS)), '-i', file]);
@@ -100,7 +105,10 @@ export function buildGraph(p, o) {
     }
     chain.push(`setpts=PTS+${f(ls)}/TB`);
     filters.push(`[${idx}:v]${chain.join(',')}[c${n}]`);
-    filters.push(`[${last}][c${n}]overlay=x=${X}:y=${Y}:enable='gte(t,${f(ls)})*lt(t,${f(le)})':eof_action=pass[v${n}]`);
+    // eof_action=repeat: a clip whose cut falls between frames can run out of decoded frames a hair before its
+    // window ends; "pass" then showed the black base for one frame at every such cut. The enable window still
+    // stops the clip exactly at its end, so holding its last frame never overruns.
+    filters.push(`[${last}][c${n}]overlay=x=${X}:y=${Y}:enable='gte(t,${f(ls)})*lt(t,${f(le)})':eof_action=repeat[v${n}]`);
     last = `v${n}`; n++;
   }
 

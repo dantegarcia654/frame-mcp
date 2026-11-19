@@ -5,7 +5,7 @@ USE FRAME FOR EVERY VIDEO EDITING TASK. The moment the user asks to edit, cut, a
 
 How to work:
 1. frame_start → opens the window. Pass your plan.
-2. frame_import the footage. Frame measures it (duration, loudness, silences) and returns the numbers.
+2. frame_import the footage. Frame measures it (duration, loudness, silences) and returns the numbers. If the result includes a decision sheet (model-guessed role, hook and steadiness per clip), plan from it instead of viewing every clip, and frame_view only the clips marked REVIEW. frame_decide asks your own questions across many clips at once. For a templated story cut, frame_swarm builds it in seconds; then direct it (strips → direct) before showing it.
 3. To cut dead air / silences / pauses, call frame_cut_silence — one call, never hand-built. frame_transcribe for speech. Use frame_view to actually look at frames.
 4. Think out loud with frame_note (kind "thinking" / "decision") — short, specific, one idea each. This is what removes the black box; do it before each batch of edits.
 5. Change the timeline ONLY through frame_edit. Give each op a "why". Prefer several small batches over one giant one, so the user can interrupt.
@@ -24,6 +24,9 @@ const pid = { project_id: { type: 'string', description: 'Optional. Defaults to 
 const why = { why: { type: 'string', description: 'One short sentence shown to the user explaining this choice.' } };
 
 export const TOOLS = [
+  {name:'frame_prompt',description:'Deploy an independent visible prompt cursor immediately. Natural language routes through Google Decisions; exact element-id: property=value skips routing. The open canvas executes the same contextual controls used by the human. A second call can route concurrently. Poll frame_prompt_jobs.',inputSchema:{type:'object',required:['prompt'],properties:{...pid,prompt:{type:'string'},clip_id:{type:'string'},playhead:{type:'number'},cursor:{type:'string',description:'Reuse a named cursor across related edits.'}}}},
+  {name:'frame_prompt_jobs',description:'Read cursor progress, routing latency, control values, conflicts and saved revisions.',inputSchema:{type:'object',properties:{...pid}}},
+  { name:'frame_revisions', description:'Read the same persistent revision history the human sees, or revert one visual revision. Checks changed properties and preserves unrelated later edits; conflicts are reported.', inputSchema:{type:'object',properties:{...pid,action:{type:'string',enum:['list','revert']},revision_id:{type:'string'},limit:{type:'number'},agent:{type:'string'}}} },
   {
     name: 'frame_start',
     description: 'Open the Frame window and start (or reopen) an editing session. ALWAYS call this first on any video editing task, before analysing footage, so the user sees the editor immediately. Returns the project and the local URL.',
@@ -52,14 +55,18 @@ export const TOOLS = [
       prepare: { type: 'boolean', description: 'Default true: for video up to 3 minutes, start the person cutout and the transcript in the background right away, so effects and captions are ready when you place them. false = do neither.' },
       paths: { type: 'array', items: { type: 'string' } },
       scenes: { type: 'boolean', description: 'Also detect scene changes in video (slower). Useful for B-roll or pre-edited footage.' },
+      decide: { type: 'boolean', description: 'Label each video clip with the decision sheet (default on when a Gemini API key is set; false to skip). Uploads a small 360 px copy of each clip to Google.' },
+      decide_pack: { type: 'string', enum: ['general', 'sketch-to-demo'], description: 'Question pack for the sheet. "general" (default): what kind of footage each clip is. "sketch-to-demo": the 14 story steps of a drawing-becomes-an-app reel. Remembered for the project.' },
+      decide_wait_s: { type: 'number', description: 'How long the import waits for labels before returning (default 12). Unfinished labels show up in frame_state.' },
       ...why, ...pid,
     } },
   },
   {
     name: 'frame_transcribe',
-    description: 'Word-level transcript of an asset using the local Whisper install, returned as timed lines in source seconds. If Whisper is not installed, or you already have timings, pass words to store them instead. Captions and cut decisions use this.',
+    description: 'Word-level transcript of an asset, made on this machine, returned as timed lines in source seconds. It usually starts by itself at import, so call this to read it. Engine: Apple on-device speech on macOS 26+ (measured: 8.7 min in about 5 s), else Whisper split into parallel ranges across the CPU cores. Names it mishears are fixed from spellings.json in the Frame data folder. If no engine is installed, or you already have timings, pass words to store them instead. Captions and cut decisions use this.',
     inputSchema: { type: 'object', required: ['asset'], properties: {
-      asset: { type: 'string' }, model: { type: 'string', description: 'Whisper model, default "base.en". Use "small" or "medium" for accuracy, a non-.en model for other languages.' },
+      asset: { type: 'string' }, model: { type: 'string', description: 'Forces Whisper with this model ("base.en", "small", "medium"; a non-.en model for other languages). Leave it out to use the fastest engine.' },
+      engine: { type: 'string', enum: ['auto', 'apple', 'whisper'], description: 'Default "auto": Apple on-device speech when available, else Whisper.' },
       language: { type: 'string' }, force: { type: 'boolean', description: 'Re-run even if a transcript exists.' },
       words: { type: 'array', description: 'Supply or correct the transcript yourself: [{text,start,end}] in source seconds.', items: { type: 'object', properties: { text: { type: 'string' }, start: { type: 'number' }, end: { type: 'number' } } } },
       ...why, ...pid,
@@ -92,6 +99,8 @@ Ops:
 • add_text {text, start, duration, track?, style?}
 • add_effects_at_words {stop?, params?, only?, max?, min?, track?, source_track?} — the effects-reel recipe in one op: the person says each effect's name (its cue words, listed by frame_effects) and that effect starts on the word, running until the next cue or a stop word (e.g. stop:["comment"] for a call to action), at most max seconds (default 3). params:{blow_away:{plate:"a2"}} sets per-effect settings. Reports what it placed, what it heard, and which effects were never said.
 • add_agent_swarm {track?, source_track?, params?} — draws the agents that made the edit over the video (an agent_swarm effect on V3): each agent's cursor and coloured tag flies to the effect it placed, boxes it and holds it while it plays. Built from the edit history, so give each effect op an agent label. Rebuild it after changing effects.
+• name_track {track,name} — label a timeline layer.
+• patch_graphic {id,node_id,patch} — change a named live graphic layer (text, color, position, geometry, animation cues). Validated, undoable, immediately previewed; never encodes a video.
 • add_effect {effect, start, duration?, params?, track?, source?} — an effect clip (default 1.5 s on V2, reading V1). frame_effects lists the effects and their settings; change settings later with update_clip {id, params:{…}}. Effects marked [needs a cutout] need frame_cutout on the footage under them first.
 • add_captions {source_track?, max_words?, max_chars?, style?, track?, replace?} — builds captions from the transcript, following every cut. Or pass phrases:[{text,start,end}] in timeline seconds.
 • style_text {track?, style, all?} — restyle every caption on a track in one go (all: true includes non-caption text).
@@ -103,7 +112,9 @@ Effect clips also take params {…} and source ("V1"…), plus start, duration, 
 Text style: size (fraction of frame height, default 0.055), color, stroke, strokeWidth, bg (box colour or null), weight, x, y (centre position 0–1), maxWidth, uppercase, font.`,
     inputSchema: { type: 'object', required: ['ops'], properties: {
       ops: { type: 'array', items: { type: 'object', required: ['op'], properties: { op: { type: 'string' }, why: { type: 'string' } }, additionalProperties: true } },
+      fast: { type: 'boolean', description: 'Apply the edit batch without per-operation writes, broadcasts, pacing or caption-raster waits; publish one cursor update per role. Preview pixels update live.' },
       summary: { type: 'string', description: 'One line describing this batch, shown as a decision before the ops play out.' },
+      preview_at: { type: 'number', description: 'Optional timeline time to show the changed elements and role cursors in the canvas.' },
       agent: { type: 'string', description: 'Optional role label shown on the cursor, e.g. "Cutter", "Captions", "Sound".' }, ...pid,
     } },
   },
@@ -168,6 +179,11 @@ Text style: size (fraction of frame height, default 0.055), color, stroke, strok
     inputSchema: { type: 'object', properties: { ...pid } },
   },
   {
+    name: 'frame_check_speech',
+    description: 'Check that no cut lands while someone is still talking. Measures every V1 edit point against the source\'s loudness envelope: speech still sounding across an out point clips the end of a word, speech already sounding before an in point clips its start. Returns each cut-off with its timecode, the word, and how much to extend. fix: true extends every fixable one (≤ 0.6 s) with a ripple, so all tracks stay in sync, then re-checks. Run it after cutting and before every render; frame_render also warns about any that remain.',
+    inputSchema: { type: 'object', properties: { fix: { type: 'boolean', description: 'Extend the clipped edges (default false: report only).' }, ...pid } },
+  },
+  {
     name: 'frame_view',
     description: 'Look with your own eyes. With t/times: returns the composited timeline frame(s), rendered by the same ffmpeg graph as the export — use it to verify framing, keying, grade and captions. With asset + times: returns raw source frames, for choosing takes. Up to 6 frames.',
     inputSchema: { type: 'object', properties: {
@@ -179,6 +195,40 @@ Text style: size (fraction of frame height, default 0.055), color, stroke, strok
     description: 'Re-read the timeline (clips, ids, times, effects) and collect anything the user changed or said in the Frame window. Call it after any pause, before a render, or whenever you are unsure the timeline is what you think it is.',
     inputSchema: { type: 'object', properties: {
       include_transcript: { type: 'boolean' }, include_timeline_words: { type: 'boolean', description: 'List the spoken words as they now fall on the timeline after cuts.' }, track: { type: 'string' }, ...pid,
+    } },
+  },
+  {
+    name: 'frame_decide',
+    description: `Ask Google's Gemini Decisions model (gemini-decision-1) typed questions about video clips, all clips in parallel, in about a second each. Use it instead of frame_view when you need the same judgment across many clips ("which takes have the speaker looking at the lens?", "which clip shows the result?"). Answers are probabilities: the model's guesses, not measurements. Where it is unsure, look with frame_view. Needs a Gemini API key; uploads a 360 px, 2 fps copy of each clip (or of the from/to range) to Google.
+questions: {key: question}. A plain string is a yes/no question. Or {type:"choice", instructions, criteria:{option: description, …}} (2–255 options) or {type:"score", instructions, criteria:["worst level", …, "best level"]}. Keys are lower_snake_case.
+It is good at what a clip shows (roles, junk, steadiness). It is weak at exact wording from audio, at finding the moment inside a clip, and at small on-screen detail such as which file is attached: check those yourself.
+pack (without questions): re-label clips with a decision-sheet pack, e.g. for footage imported before labels were on.`,
+    inputSchema: { type: 'object', properties: {
+      assets: { type: 'array', items: { type: 'string' }, description: 'Video asset ids. Default: every video clip in the project.' },
+      questions: { type: 'object', description: 'Up to ~50 questions, asked together in one request per clip.', additionalProperties: true },
+      from: { type: 'number', description: 'Source seconds: ask about this range only (applies to every clip asked).' }, to: { type: 'number' },
+      pack: { type: 'string', enum: ['general', 'sketch-to-demo'], description: 'Re-label with this pack instead of asking questions.' },
+      ...why, ...pid,
+    } },
+  },
+  {
+    name: 'frame_swarm',
+    description: `Build a story cut in seconds with a swarm of agents, then direct it for taste. Needs the decision sheet (a Gemini API key).
+action "run" (default): fills a story template on V1, live. Caster lays a rough cut from the decision sheet at once; Scouts ask gemini-decision-1 about every 2 s window of each slot's candidate clips in parallel; Trimmer swaps in the best-rated window as each slot's answers land (a variety rule keeps angles apart). Caster and Trimmer are rules over model answers. The result lists every slot with its candidates and hands you the Director brief.
+action "strips": 1-frame-per-second filmstrips of the candidate clips (or of assets), as images. This is how you judge moments.
+action "direct": apply your picks as the Director: picks [{slot, asset, start, why}], one replace_source per slot, live, with your reason in the feed.
+The swarm knows what a shot shows, not which moment is best: always do the Director pass before showing the cut. Templates: "sketch-to-demo" (13 slots: reaction hook, payoff first, how it was made, result, demo). Or pass slots [{id, role, seconds, about?}] with roles from the decision pack.`,
+    inputSchema: { type: 'object', properties: {
+      action: { type: 'string', enum: ['run', 'strips', 'direct'] },
+      template: { type: 'string', description: 'run: built-in template name (default "sketch-to-demo").' },
+      slots: { type: 'array', description: 'run: a custom template instead: [{id, role, seconds, about?}]; role from the pack ("general" roles: talking_head, screen_recording, hands_demo, b_roll, reaction, graphic).', items: { type: 'object', additionalProperties: true } },
+      pack: { type: 'string', enum: ['general', 'sketch-to-demo'], description: 'run with custom slots: which decision pack the roles come from.' },
+      replace: { type: 'boolean', description: 'run: clear V1 first if it already has clips.' },
+      muted: { type: 'boolean', description: 'run: mute the placed clips (default true; music-driven cuts).' },
+      assets: { type: 'array', items: { type: 'string' }, description: 'strips: which clips to show (default: the swarm\'s candidates).' },
+      picks: { type: 'array', description: 'direct: [{slot, asset, start (source seconds), why}].', items: { type: 'object', additionalProperties: true } },
+      summary: { type: 'string', description: 'direct: one line shown before the picks play out.' },
+      ...why, ...pid,
     } },
   },
   {
