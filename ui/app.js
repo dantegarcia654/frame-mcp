@@ -91,7 +91,7 @@ function onProjectDelta(m) {
     previewTracks = previewTracks.map(track=>track.map(c=>byId.get(c.id) || c));
     for (const c of m.clips) {
       const cell = $('#rows').querySelector(`.clip[data-id="${CSS.escape(c.id)}"]`);
-      if (cell && presenting) cell.replaceWith(clipEl(c, laneH(c.track)));
+      if (cell) cell.replaceWith(clipEl(c, laneH(c.track)));
     }
   }
   if (m.revisions?.length) P.revisions = [...(P.revisions || []), ...m.revisions].slice(-300);
@@ -117,11 +117,13 @@ function showTimelineActivity(entries) {
   for (const entry of entries) {
     if (entry.kind !== 'op' || !entry.op) continue;
     const titleTask = entry.op === 'frame_revise_title';
-    if (!titleTask && !presenting) continue;
+    const reframeTask = entry.op === 'frame_reframe';
+    if (!titleTask && !reframeTask && !presenting) continue;
     const owner = entry.actor === 'user' ? 'You' : entry.agent || 'FRAME';
     const label = P.clips.find(c => entry.clipIds?.includes(c.id))?.label;
     const message = titleTask
       ? ({ started: 'Revising title', applied: `${label || 'Title'} saved`, failed: 'Title edit failed', unchanged: 'Title already matches' })[entry.phase]
+      : reframeTask ? ({ started: 'Reframing footage', applied: `${label || 'Footage'} reframed`, failed: 'Reframe failed', unchanged: 'Crop already matches' })[entry.phase]
       : `${entry.op.replaceAll('_', ' ')}${label ? ' · ' + label : ''}`;
     if (!message) continue;
     status.textContent = `${owner} · ${message}`;
@@ -135,7 +137,7 @@ function showTimelineActivity(entries) {
       if (presenting) {
         clip.querySelector('.clipTask')?.remove();
         const badge = el('span', 'clipTask');
-        badge.textContent = titleTask ? 'FRAME · Title edit' : owner;
+        badge.textContent = titleTask ? 'FRAME · Title edit' : reframeTask ? 'FRAME · Reframe' : owner;
         clip.append(badge);
         setTimeout(() => badge.remove(), 2200);
       }

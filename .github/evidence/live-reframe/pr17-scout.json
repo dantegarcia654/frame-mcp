@@ -1,0 +1,281 @@
+[
+  {
+    "name": "static crop",
+    "operations": [
+      [
+        {
+          "op": "update_clip",
+          "id": "c_usgd83",
+          "scale": 1.85,
+          "x": 0.0555,
+          "y": 0.0555
+        }
+      ]
+    ],
+    "replies": [
+      "1. ✓ source-with-test-score.mp4 · scale 1 → 1.85 · x 0 → 0.0555 · y 0 → 0.0555 [c_usgd83]"
+    ],
+    "stateDeliveryMs": 12,
+    "events": [],
+    "samples": 85,
+    "silentPolls": 0,
+    "changedElement": false,
+    "mediaRange": [
+      0.79026,
+      1.796451
+    ]
+  },
+  {
+    "name": "grade",
+    "operations": [
+      [
+        {
+          "op": "update_clip",
+          "id": "c_5gdagv",
+          "grade": {
+            "saturation": 0
+          }
+        }
+      ]
+    ],
+    "replies": [
+      "1. ✓ source-with-test-score.mp4 · grade saturation 0 [c_5gdagv]"
+    ],
+    "stateDeliveryMs": 13,
+    "events": [],
+    "samples": 69,
+    "silentPolls": 0,
+    "changedElement": false,
+    "mediaRange": [
+      0.790946,
+      1.803125
+    ]
+  },
+  {
+    "name": "keyframed title motion",
+    "operations": [
+      [
+        {
+          "op": "patch_graphic",
+          "id": "c_ag2s9d",
+          "node_id": "title",
+          "patch": {
+            "anim": [
+              {
+                "t": 0,
+                "x": 0
+              },
+              {
+                "t": 3,
+                "x": 0.5,
+                "e": "io"
+              }
+            ]
+          }
+        }
+      ]
+    ],
+    "replies": [
+      "1. ✓ Revised graphic title: anim (live; no encoding) [c_ag2s9d]"
+    ],
+    "stateDeliveryMs": 7,
+    "events": [],
+    "samples": 84,
+    "silentPolls": 0,
+    "changedElement": false,
+    "mediaRange": [
+      0.736986,
+      1.735196
+    ]
+  },
+  {
+    "name": "overlay insertion",
+    "operations": [
+      [
+        {
+          "op": "add_effect",
+          "effect": "live_graphic",
+          "track": "V3",
+          "start": 0,
+          "duration": 5,
+          "params": {
+            "nodes": [
+              {
+                "kind": "line",
+                "id": "edge",
+                "x": 0.1,
+                "y": 0.8,
+                "w": 0.8,
+                "lineWidth": 0.015,
+                "color": "#d99568"
+              }
+            ]
+          }
+        }
+      ]
+    ],
+    "replies": [
+      "1. ✓ Effect Live graphic effect on V3 at 00:00.00 for 5s, reading V1 [c_7zudsv]"
+    ],
+    "stateDeliveryMs": 13,
+    "events": [],
+    "samples": 84,
+    "silentPolls": 0,
+    "changedElement": false,
+    "mediaRange": [
+      0.735784,
+      1.745736
+    ]
+  },
+  {
+    "name": "split-screen insertion",
+    "operations": [
+      [
+        {
+          "op": "update_clip",
+          "id": "c_uan6fx",
+          "scale": 0.5,
+          "x": -0.25
+        },
+        {
+          "op": "add_clip",
+          "asset": "a1",
+          "track": "V2",
+          "scale": 0.5,
+          "x": 0.25,
+          "muted": true,
+          "start": 0,
+          "out": 5
+        }
+      ]
+    ],
+    "replies": [
+      "1. ✓ source-with-test-score.mp4 · scale 1 → 0.5 · x 0 → -0.25 [c_uan6fx]"
+    ],
+    "stateDeliveryMs": 30,
+    "events": [],
+    "samples": 84,
+    "silentPolls": 0,
+    "changedElement": false,
+    "mediaRange": [
+      0.735978,
+      1.730735
+    ]
+  },
+  {
+    "name": "split behind playhead",
+    "operations": [
+      [
+        {
+          "op": "split_clip",
+          "id": "c_wqw13w",
+          "at": 0.5
+        }
+      ]
+    ],
+    "replies": [
+      "1. ✓ Split source-with-test-score.mp4 at 00:00.50 [c_wqw13w, c_wdhezq]"
+    ],
+    "stateDeliveryMs": 12,
+    "events": [
+      {
+        "type": "pause",
+        "t": 1.1745,
+        "same": true
+      }
+    ],
+    "samples": 85,
+    "silentPolls": 0,
+    "changedElement": true,
+    "mediaRange": [
+      0.791783,
+      1.731549
+    ]
+  },
+  {
+    "name": "timed caption",
+    "operations": [
+      [
+        {
+          "op": "add_text",
+          "text": "Petals open",
+          "start": 0,
+          "duration": 5
+        }
+      ]
+    ],
+    "replies": [
+      "1. ✓ Text \"Petals open\" on T1 at 00:00.00 for 5s [c_e85v9y]"
+    ],
+    "stateDeliveryMs": 26,
+    "events": [],
+    "samples": 83,
+    "silentPolls": 0,
+    "changedElement": false,
+    "mediaRange": [
+      0.760161,
+      1.756751
+    ]
+  },
+  {
+    "name": "audio gain",
+    "operations": [
+      [
+        {
+          "op": "update_clip",
+          "id": "c_e0mpof",
+          "volume": 0.35
+        }
+      ]
+    ],
+    "replies": [
+      "1. ✓ source-with-test-score.mp4 · volume 1 → 0.35 [c_e0mpof]"
+    ],
+    "stateDeliveryMs": 18,
+    "events": [],
+    "samples": 83,
+    "silentPolls": 0,
+    "changedElement": false,
+    "mediaRange": [
+      0.760895,
+      1.744879
+    ]
+  },
+  {
+    "name": "two disjoint tool calls",
+    "operations": [
+      [
+        {
+          "op": "update_clip",
+          "id": "c_hdyeq7",
+          "grade": {
+            "saturation": 0.45
+          }
+        }
+      ],
+      [
+        {
+          "op": "patch_graphic",
+          "id": "c_ojx1ik",
+          "node_id": "title",
+          "patch": {
+            "color": "#f3bfaa"
+          }
+        }
+      ]
+    ],
+    "replies": [
+      "1. ✓ source-with-test-score.mp4 · grade saturation 0.45 [c_hdyeq7]",
+      "1. ✓ Revised graphic title: color (live; no encoding) [c_ojx1ik]"
+    ],
+    "stateDeliveryMs": 30,
+    "events": [],
+    "samples": 82,
+    "silentPolls": 0,
+    "changedElement": false,
+    "mediaRange": [
+      0.768839,
+      1.81468
+    ]
+  }
+]

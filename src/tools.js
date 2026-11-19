@@ -1,7 +1,7 @@
 // What Claude sees. These descriptions are the whole contract between Claude and Frame.
 export const INSTRUCTIONS = `Frame is a live editing room. The user watches a real timeline fill in while you edit, and can stop, steer or hand-edit at any moment.
 
-USE FRAME FOR EVERY VIDEO EDITING TASK. Start new work with frame_start. For a live title change in an already open project, call frame_revise_title with its project ID while the user keeps playing. Do not reopen the project or render until asked. Do not edit video with hidden shell scripts when Frame can do it.
+USE FRAME FOR EVERY VIDEO EDITING TASK. Start new work with frame_start. For a live title change in an already open project, call frame_revise_title with its project ID while the user keeps playing. For a live footage crop, call frame_reframe with the open project and exact clip ID. Do not reopen the project or render until asked. Do not edit video with hidden shell scripts when Frame can do it.
 
 How to work:
 1. frame_start → opens the window. Pass your plan.
@@ -43,10 +43,23 @@ export const TOOLS = [
       } },
     } },
   },
+  {
+    name: 'frame_reframe',
+    description: 'Apply a static cover crop to one video or still in the active project while playback continues. Target the exact clip ID from frame_state. Set magnification relative to cover and a focal point from source pixels (normalized from the top left). FRAME moves the focal point toward frame center and clamps at the source edges. Replaces previous placement and position keyframes for the entire clip. Timing, audio and other clips stay as they are. Returns the actual placement and saved revision.',
+    inputSchema: { type: 'object', required: ['project_id', 'clip_id', 'zoom', 'focus'], properties: {
+      project_id: { type: 'string' },
+      clip_id: { type: 'string' },
+      zoom: { type: 'number', minimum: 1, maximum: 3 },
+      focus: { type: 'object', required: ['x', 'y'], additionalProperties: false, properties: {
+        x: { type: 'number', minimum: 0, maximum: 1 },
+        y: { type: 'number', minimum: 0, maximum: 1 },
+      } },
+    } },
+  },
   { name:'frame_revisions', description:'Read the same persistent revision history the human sees, or revert one visual revision. Checks changed properties and preserves unrelated later edits; conflicts are reported.', inputSchema:{type:'object',properties:{...pid,action:{type:'string',enum:['list','revert']},revision_id:{type:'string'},limit:{type:'number'},agent:{type:'string'}}} },
   {
     name: 'frame_start',
-    description: 'Open the Frame window and start (or reopen) an editing session. ALWAYS call this first on any video editing task, before analysing footage, so the user sees the editor immediately. Returns the project and the local URL.',
+    description: 'Open the Frame window and start (or reopen) an editing session. Call this first for new editing work so the user sees the editor immediately. Use frame_state for a live edit in an already open project. Returns the project and the local URL.',
     inputSchema: { type: 'object', properties: {
       name: { type: 'string', description: 'Project name, e.g. "Zenzap reel v2".' },
       aspect: { type: 'string', description: '"9:16" (default), "16:9", "1:1", "4:5", "4:3" or "WIDTHxHEIGHT".' },
