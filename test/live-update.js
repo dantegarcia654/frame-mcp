@@ -82,7 +82,7 @@ try {
     const event = await until(() => events.find(e => e.promptJobs?.some(j => j.id === job_id && j.status === status)));
     return event.promptJobs.find(j => j.id === job_id);
   };
-  assert.match((await titlePrompt(1, 'needs_input')).phase, /Connect Google Decisions/);
+  assert.match((await titlePrompt(1, 'needs_input')).phase, /Canvas language routing needs Google Decisions/);
   const title = await titlePrompt(3, 'ready');
   assert.equal(title.route.provider, 'local-title');
   assert.equal(title.route.api_ms, 0);
@@ -120,6 +120,18 @@ try {
   assert(Math.abs(animAt(graphic, .38).a - .9375) < 1e-8);
   const persisted = JSON.parse(await readFile(home+'/projects/'+initial.project.id+'/project.json','utf8'));
   for (const clip of delta.clips) assert.deepEqual(persisted.clips.find(c => c.id === clip.id), clip);
+
+  const waitStart = events.length;
+  const listening = call('frame_wait', { project_id: initial.project.id, timeout_s: 2 });
+  await until(() => events.slice(waitStart).find(e => e.project?.status.state === 'waiting'));
+  await ui('message', { text: 'Make the punch-in gentler and delay the title.', t: .4 });
+  const reply = await listening;
+  assert(reply.content.some(c => c.text.includes('Make the punch-in gentler')));
+  const answered = await until(() => events.slice(waitStart).find(e => e.type === 'project_delta' && e.status?.state === 'active'));
+  assert.equal(answered.clips, undefined);
+  const timeoutStart = events.length;
+  await call('frame_wait', { project_id: initial.project.id, timeout_s: .25 });
+  await until(() => events.slice(timeoutStart).find(e => e.type === 'project_delta' && e.status?.state === 'idle'));
 
   stop.abort();
   await read;

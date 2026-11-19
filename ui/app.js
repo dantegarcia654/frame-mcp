@@ -85,6 +85,7 @@ function onProjectDelta(m) {
   if (!P || P.id !== m.id) return;
   lastCallAt = m.lastCallAt || lastCallAt;
   if (m.version != null) P.version = m.version;
+  if (m.status) P.status = m.status;
   if (m.clips?.length) {
     const byId = new Map(m.clips.map(c=>[c.id,c]));
     P.clips = P.clips.map(c=>byId.get(c.id) || c);
@@ -1203,7 +1204,10 @@ function processPromptJobs(jobs){
  for (const job of listed) {
   const row = el('div','promptRow');
   row.dataset.prompt = job.id;
-  row.append(el('b','',esc(job.cursor)),el('span','',esc(job.phase)));
+  const guidance = job.status === 'needs_input'
+    ? ' No edit was applied. For a multi-part request, paste it into the composer and choose Send to agent with your MCP client connected. For a canvas edit, select one layer and request one change.'
+    : '';
+  row.append(el('b','',esc(job.cursor)),el('span','',esc(job.phase + guidance)));
   if (job.revision_id) {
    const review = el('button','','Review');
    review.onclick = () => openRevision(job.revision_id);

@@ -121,7 +121,7 @@ function emitPromptUpdate(p) {
 
 function sendProjectDelta(p, delta) {
   if (p.id !== currentId) return;
-  const msg = `data: ${JSON.stringify({ type: 'project_delta', id: p.id, lastCallAt, ...delta })}\n\n`;
+  const msg = `data: ${JSON.stringify({ type: 'project_delta', id: p.id, lastCallAt, status: p.status, ...delta })}\n\n`;
   for (const c of clients) c.write(msg);
 }
 
@@ -1063,10 +1063,19 @@ const handlers = {
   async frame_wait(a) {
     const p = current(a.project_id);
     const until = Date.now() + Math.min(Number(a.timeout_s || 45), 50) * 1000;
-    p.status = { state: 'waiting', label: 'Claude is waiting for you' }; emit(p);
+    const waiting = { state: 'waiting', label: 'Claude is waiting for you' };
+    p.status = waiting;
+    emit(p);
     const wasPaused = p.paused;
     while (Date.now() < until && !p.inbox.length && p.paused === wasPaused) await sleep(250);
-    return [text(p.inbox.length || p.paused !== wasPaused ? 'The user responded.' : 'No user input yet. Call frame_wait again to keep waiting, or continue if you were not paused.')];
+    const answered = p.inbox.length || p.paused !== wasPaused;
+    if (p.status === waiting) {
+      p.status = p.paused ? { state: 'paused', label: 'Paused by you' }
+        : answered ? { state: 'active', label: 'Claude is editing' }
+        : { state: 'idle', label: 'Canvas ready' };
+      sendProjectDelta(p, {});
+    }
+    return [text(answered ? 'The user responded.' : 'No user input yet. Call frame_wait again to keep waiting, or continue if you were not paused.')];
   },
 
   async frame_history(a) {
@@ -1130,7 +1139,6 @@ async function callTool(name, args) {
     try {
       const content = await h(args || {});
       p = currentId ? load(currentId) : p;
-      if (p && p.status.state === 'waiting') p.status = { state: 'active', label: 'Claude is editing' };
       const extra = userInput(p);
       if (extra) content.push(text(extra.trim()));
       return { content };
