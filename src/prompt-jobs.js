@@ -31,6 +31,21 @@ function directRoute(prompt,list){
  if(!['fill','color','text'].includes(property))value=Number(value);
  return {clip_id:clip.id,property,value,provider:'exact-control',api_ms:0};
 }
+function titleRoute(prompt, clips, playhead) {
+ const request = prompt.match(/^change the ([^"“”\r\n]+?\btitle) to (?:"([^"\r\n]+)"|“([^”\r\n]+)”)[.!?]?$/i);
+ if (!request || !Number.isFinite(playhead)) return null;
+ const label = request[1].toLowerCase(), value = (request[2] ?? request[3]).trim();
+ if (!value) return null;
+ const matches = clips.filter(clip => {
+  const nodes = clip.effect?.type === 'live_graphic' && clip.effect.params.nodes;
+  return nodes?.length === 1 && nodes[0].kind === 'text' && typeof nodes[0].text === 'string'
+   && clip.label?.trim().toLowerCase() === label && playhead >= clip.start
+   && playhead < clip.start + (clip.out - clip.in) / (clip.speed || 1);
+ });
+ if (matches.length > 1) throw new Error('More than one matching title is on screen. Use an exact element ID.');
+ if (!matches.length) return null;
+ return { clip_id: matches[0].id, property: 'text', value, provider: 'local-title', api_ms: 0 };
+}
 async function decide(prompt,list,playhead){
  const cfg=decisionsConfig();if(!cfg.on)throw new Error('Connect Google Decisions, or use element-id: control=value.');
  const start=performance.now();
@@ -81,9 +96,9 @@ export function createPromptRunner({publish,commit}){
   // Routing runs outside the serialized timeline tool queue. A second prompt starts immediately.
   void (async()=>{
    try{
-    const route=directRoute(job.prompt,list)||await decide(job.prompt,list,a.playhead);
+    const route=directRoute(job.prompt,list)||titleRoute(job.prompt,p.clips,a.playhead)||await decide(job.prompt,list,a.playhead);
     if(job.status==='cancelled')return;
-    const clip=list.find(c=>c.id===route.clip_id),node=clip.effect.params.nodes[0];
+    const clip=(route.provider==='local-title'?p.clips:list).find(c=>c.id===route.clip_id),node=clip.effect.params.nodes[0];
     const property=route.property;if(typeof route.value==='number')route.value=Math.round(route.value*1e6)/1e6;if(['fill','color','accent'].includes(property)&&typeof route.value==='string')route.value=route.value.toLowerCase();
     if(property!=='opacity'&&!(property==='color'&&node.kind==='brand')&&!Object.hasOwn(node,property))throw new Error(`This element has no ${PROPERTY_LABELS[property]||property} control.`);
     job.route=route;job.clip_id=clip.id;job.node_id=node.id;job.element=clip.label||node.id;job.control=PROPERTY_LABELS[property]||property;

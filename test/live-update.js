@@ -9,7 +9,7 @@ const home = await mkdtemp(tmpdir() + '/frame-live-test-');
 const port = process.env.FRAME_LIVE_TEST_PORT || '4825';
 const base = 'http://127.0.0.1:' + port;
 const proc = spawn(process.execPath, [new URL('../bin/frame.js', import.meta.url).pathname, 'serve'],
-  { env: { ...process.env, FRAME_PORT: port, FRAME_HOME: home, FRAME_NO_OPEN: '1', FRAME_PACE: '0' }, stdio: 'ignore' });
+  { env: { ...process.env, FRAME_PORT: port, FRAME_HOME: home, FRAME_NO_OPEN: '1', FRAME_PACE: '0', FRAME_DECISIONS: 'off' }, stdio: 'ignore' });
 const exited = once(proc, 'exit');
 const events = [];
 const stop = new AbortController();
@@ -70,9 +70,32 @@ try {
   assert.equal(events.filter(e=>e.type==='state').length, 1, 'prompt updates must not resend the project');
   const saved = JSON.parse(await readFile(home+'/projects/'+initial.project.id+'/project.json','utf8'));
   assert(saved.promptJobs.filter(j=>ids.includes(j.id)).every(j=>j.status==='done'&&j.revision_id));
+  const addTitle = () => call('frame_edit', { ops: [{ op: 'add_effect', start: 2, duration: 2, track: 'V4',
+    effect: 'live_graphic', label: 'Main title', params: { nodes: [{ kind: 'text', id: 'main-title', x: .5, y: .5,
+      size: .08, text: 'First look', color: '#ffffff' }] } }] });
+  await addTitle();
+  const titlePrompt = async (playhead, status) => {
+    const r = await call('frame_prompt', { prompt: 'Change the Main title to “Take two”.', playhead });
+    const { job_id } = JSON.parse(r.content[0].text);
+    const event = await until(() => events.find(e => e.promptJobs?.some(j => j.id === job_id && j.status === status)));
+    return event.promptJobs.find(j => j.id === job_id);
+  };
+  assert.match((await titlePrompt(1, 'needs_input')).phase, /Connect Google Decisions/);
+  const title = await titlePrompt(3, 'ready');
+  assert.equal(title.route.provider, 'local-title');
+  assert.equal(title.route.api_ms, 0);
+  assert.equal(title.before, 'First look');
+  assert((await ui('claim_prompt', { id: title.id, client: 'smoke' })).ok);
+  await ui('ops', { surface: 'canvas', prompt_job: { id: title.id, client: 'smoke' },
+    ops: [{ op: 'patch_graphic', id: title.clip_id, node_id: title.node_id, patch: { text: 'Take two' } }] });
+  const changed = await until(() => events.find(e => e.promptJobs?.some(j => j.id === title.id && j.status === 'done')));
+  assert.deepEqual(changed.clips.map(c => c.id), [title.clip_id]);
+  assert.equal(changed.clips[0].effect.params.nodes[0].text, 'Take two');
+  await addTitle();
+  assert.match((await titlePrompt(3, 'needs_input')).phase, /More than one matching title/);
   stop.abort();
   await read;
-  console.log('Live update smoke passed: compact deltas, concurrent prompts, one claim owner, and durable canvas revisions.');
+  console.log('Live update smoke passed: compact deltas, concurrent prompts, one claim owner, durable canvas revisions, and scoped title routing.');
 } finally {
   stop.abort();
   proc.kill();
