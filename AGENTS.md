@@ -10,6 +10,7 @@ Frame is a local MCP server plus a browser window. When an AI edits a video, the
 | Understand why it was built this way | [docs/DESIGN.md](docs/DESIGN.md) |
 | Write your own test cases | [docs/TESTING.md](docs/TESTING.md) |
 | Know what is weak, missing or untested | [docs/ROADMAP.md](docs/ROADMAP.md) |
+| Submit evidence, review a PR, or respond to a review | [docs/REVIEW-LOOP.md](docs/REVIEW-LOOP.md) |
 
 ## Run it
 
