@@ -1,4 +1,5 @@
 // Turns the timeline into one ffmpeg command. The same graph renders the final MP4 and the still frames Claude looks at.
+import { cameraExpression, coverSize } from '../ui/clip-reframe.js';
 import { moveAt, moveExpr } from '../ui/clip-move.js';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -27,6 +28,24 @@ function gradeFilters(g) {
     out.push(`colorchannelmixer=rr=${f(R + (1 - R) * s)}:rg=${f(G - G * s)}:rb=${f(B - B * s)}:gr=${f(R - R * s)}:gg=${f(G + (1 - G) * s)}:gb=${f(B - B * s)}:br=${f(R - R * s)}:bg=${f(G - G * s)}:bb=${f(B + (1 - B) * s)}`);
   }
   return out;
+}
+
+// FFmpeg scales each input frame at the curve time and crops to a fixed-size
+// stream before overlay. Crop receives the explicit scaled dimensions because its
+// iw/ih do not track the scale filter's frame-by-frame size.
+function reframeFilters(reframe, localTime, asset, W, H, still) {
+  const base = coverSize(asset.width, asset.height, W, H);
+  const t = still ? String(localTime + reframe.offset) : `(if(isnan(t),0,t)+${localTime + reframe.offset})`;
+  const zoom = cameraExpression(reframe, 'zoom', t);
+  const size = base => `(2*round(${base}*(${zoom})/2))`;
+  const w = size(base.w), h = size(base.h);
+  const crop = (axis, picture, frame) => {
+    const room = `max(0,(${picture}-${frame})/2-2)`;
+    const focus = cameraExpression(reframe, axis, t);
+    return `(${picture}-${frame})/2+clip(((${focus})-0.5)*${picture},-${room},${room})`;
+  };
+  return [`scale=w='${w}':h='${h}':eval=frame`,
+    `crop=w=${W}:h=${H}:x='${crop('x', w, W)}':y='${crop('y', h, H)}':exact=1`];
 }
 
 /** Which drawn frame of an effect clip shows at timeline second t. Effects start on a frame boundary (add_effect snaps them). */
@@ -90,7 +109,11 @@ export function buildGraph(p, o) {
         chain.push(`setpts=(PTS-STARTPTS)/${f(c.speed)}`, `fps=${FPS}`);
         if (a.hasAudio && !c.muted && (c.volume ?? 1) > 0 && !o.still && !o.noAudio) audio.push({ c, idx, ls, le });
       }
-      chain.push(`scale=${sw}:${sh}`, 'setsar=1');
+      if (c.reframe) {
+        X = 0; Y = 0;
+        chain.push(...reframeFilters(c.reframe, cs - c.start, a, W, H, o.still));
+      } else chain.push(`scale=${sw}:${sh}`);
+      chain.push('setsar=1');
       const g = c.grade ? gradeFilters(c.grade) : [];
       if (g.length) chain.push('format=rgba', ...g);
       if (c.key) chain.push(`chromakey=${hex(c.key.color)}:${f(c.key.similarity)}:${f(c.key.blend)}`);

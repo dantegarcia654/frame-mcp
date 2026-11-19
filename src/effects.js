@@ -75,7 +75,7 @@ const readsMatte = (p, c) => usesCutout(p, c) && EFFECTS[c.effect.type]?.matte !
 
 function keys(p, c) {
   const cut = usesCutout(p, c);
-  const src = sourceClips(p, c).map((x) => ({ a: x.asset, k: x.kind, s: x.start, i: x.in, o: x.out, sp: x.speed, fit: x.fit, sc: x.scale, x: x.x, y: x.y, g: x.grade, ky: x.key, cut: cut ? p.assets[x.asset]?.cutout?.version : undefined }));
+  const src = sourceClips(p, c).map((x) => ({ a: x.asset, k: x.kind, s: x.start, i: x.in, o: x.out, sp: x.speed, fit: x.fit, sc: x.scale, x: x.x, y: x.y, reframe: x.reframe, g: x.grade, ky: x.key, cut: cut ? p.assets[x.asset]?.cutout?.version : undefined }));
   const srcKey = sha([p.width, p.height, p.fps, c.start, fxFrames(c, p.fps), src, c.effect.params?.plate || null]);
   const fxKey = sha([srcKey, c.effect, c.in, c.out, effectCode()]);
   return { srcKey, fxKey };
@@ -118,7 +118,8 @@ async function extractPlate(p, c, dir) {
   if (fs.existsSync(out)) return out;
   const tpl = sourceClips(p, c).find((x) => x.start <= c.start + 1e-4) || sourceClips(p, c)[0];
   const mid = plate.kind === 'image' ? 0 : round(Math.max(0, plate.duration / 2 - 0.5 / p.fps), 4);
-  const clip = { ...tpl, id: 'plate', asset: plate.id, kind: plate.kind, start: c.start, in: mid, out: round(mid + 1 / p.fps + 1e-3, 4), speed: 1, muted: true, opacity: 1, fadeIn: undefined, fadeOut: undefined, key: undefined };
+  const reframe = tpl.reframe && { ...tpl.reframe, offset: tpl.reframe.offset + c.start - tpl.start };
+  const clip = { ...tpl, reframe, id: 'plate', asset: plate.id, kind: plate.kind, start: c.start, in: mid, out: round(mid + 1 / p.fps + 1e-3, 4), speed: 1, muted: true, opacity: 1, fadeIn: undefined, fadeOut: undefined, key: undefined };
   await ffmpegSeq(buildGraph({ ...p, clips: [clip] }, { window: [c.start], still: true, rasters: {}, effects: {}, assetPath: (a) => a.path }), out, 1, false);
   return out;
 }
@@ -264,7 +265,7 @@ export async function ensureEffects(p, want, ctx) {
       const at = sourceAt(p, c, i), a = at && p.assets[at.clip.asset];
       let face = null, person = null;
       if (at && a?.cutout && cut) {
-        const tr = trackAt(ctx.trackOf(a), at.s), r = placeRect(a.width, a.height, at.clip, p.width, p.height);
+        const tr = trackAt(ctx.trackOf(a), at.s), r = placeRect(a.width, a.height, at.clip, p.width, p.height, c.start + i / p.fps - at.clip.start);
         face = mapBox(tr.face, r); person = mapBox(tr.person, r);
       }
       const key = `${c.id}_${i}`, { t, d } = effectTime(c, c.start + i / p.fps);

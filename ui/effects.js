@@ -1,3 +1,4 @@
+import { reframeRect } from './clip-reframe.js';
 import { drawNodes, validateNodes } from './live-graphics.js';
 // The one place effect pixels come from.
 // The window imports this to preview effect clips live. The service runs this same file in headless Chrome to draw the
@@ -42,7 +43,8 @@ function fitSize(g, text, maxW, maxH, weight, fam) {
 // ───────────────────────── shared helpers (also used by the service and the window)
 
 /** Where a clip's picture sits in a W×H frame. Same maths as src/render.js. */
-export function placeRect(aw, ah, c, W, H) {
+export function placeRect(aw, ah, c, W, H, localTime = 0, margin = 2) {
+  if (c.reframe) return reframeRect(c.reframe, localTime, aw, ah, W, H, margin);
   const s = (c.fit === 'contain' ? Math.min(W / aw, H / ah) : Math.max(W / aw, H / ah)) * (c.scale || 1);
   const w = aw * s, h = ah * s;
   return { x: (W - w) / 2 + (c.x || 0) * W, y: (H - h) / 2 + (c.y || 0) * H, w, h };

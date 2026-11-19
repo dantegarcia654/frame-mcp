@@ -1,3 +1,4 @@
+import { coverSize, coverOffset, validateReframe } from '../ui/clip-reframe.js';
 import { createPromptRunner } from './prompt-jobs.js';
 import { applyRevision, revertRevision } from './revisions.js';
 // The Frame daemon: one local process that owns projects, serves the live UI and executes every tool call.
@@ -10,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { VERSION, PORT, HOME, BASE, sleep, uid, round, mkdirp, run, tc } from './util.js';
 import * as media from './media.js';
 import * as packs from './packs.js';
-import { newProject, applyOp, describe, projectDuration, timelineWords, end, timelineIssues } from './project.js';
+import { newProject, applyOp, describe, projectDuration, timelineWords, dur, end, timelineIssues } from './project.js';
 import { buildGraph, ffmpegArgs, runFfmpeg, fxIndex, fxFrames } from './render.js';
 import { makeCutout, cutoutEngine } from './cutout.js';
 import { ensureEffects, handleJobRequest, effectProblem, sourceClips, liveStack } from './effects.js';
@@ -780,32 +781,42 @@ const handlers = {
       if (![asset?.width, asset?.height, p.width, p.height].every(n => Number.isFinite(n) && n > 0)) {
         throw new Error('Reframe needs a source and project with valid picture dimensions.');
       }
-      const { width, height } = asset;
-      const { zoom, focus } = a;
-      if (!Number.isFinite(zoom) || zoom < 1 || zoom > 3 ||
-          ![focus?.x, focus?.y].every(v => Number.isFinite(v) && v >= 0 && v <= 1)) {
-        throw new Error('Supply zoom from 1 to 3 and source focus x/y from 0 to 1.');
+      const { zoom, focus, keyframes } = a;
+      const animated = keyframes !== undefined;
+      if (a.replace_motion !== true && (clip.move?.length || (!animated && clip.reframe))) {
+        throw new Error('This clip has position keyframes. Use replace_motion:true to replace them, or keep the existing motion.');
       }
-      const cover = Math.max(p.width / width, p.height / height);
-      // Reserve a tiny edge margin where possible for FFmpeg's even-size/overlay rounding.
-      const placement = (point, sourceSize, frameSize) => {
-        const ratio = sourceSize * cover * zoom / frameSize;
-        const room = Math.max(0, (ratio - 1) / 2 - 2 / frameSize);
-        return Math.max(-room, Math.min(room, (0.5 - point) * ratio));
-      };
-      const x = placement(focus.x, width, p.width), y = placement(focus.y, height, p.height);
-      const op = { op: 'update_clip', id: clip.id, fit: 'cover', scale: zoom, x, y, move: null, ripple: false };
+      const op = { op: 'update_clip', id: clip.id, ripple: false, move: null };
+      let placement, description;
+      if (animated) {
+        if (zoom !== undefined || focus !== undefined) throw new Error('Choose keyframes or static zoom and focus.');
+        op.reframe = validateReframe({ keyframes });
+        if (op.reframe.keyframes.at(-1).t > dur(clip) + 1e-6) throw new Error('Reframe keyframes must fit within the clip duration.');
+        placement = { keyframes: op.reframe.keyframes };
+        description = `${keyframes.length}-keyframe crop`;
+      } else {
+        if (!Number.isFinite(zoom) || zoom < 1 || zoom > 3 ||
+            ![focus?.x, focus?.y].every(v => Number.isFinite(v) && v >= 0 && v <= 1)) {
+          throw new Error('Supply zoom from 1 to 3 and source focus x/y from 0 to 1.');
+        }
+        const size = coverSize(asset.width, asset.height, p.width, p.height);
+        placement = { scale: zoom,
+          x: coverOffset(focus.x, size.w * zoom, p.width) / p.width,
+          y: coverOffset(focus.y, size.h * zoom, p.height) / p.height };
+        Object.assign(op, placement, { fit: 'cover', reframe: null });
+        description = `${zoom}× cover crop`;
+      }
       const { next, revision } = stageClipRevision(p, clip, op, 'FRAME reframe tool');
       const label = clip.label || asset.name || clip.id;
       const phase = revision ? 'applied' : 'unchanged';
-      const entry = activity(next, phase, `${label} · ${zoom}× cover crop${revision ? ' saved' : ' already set'}`, {
-        revisionId: revision?.id, clipIds: [clip.id],
+      const entry = activity(next, phase, `${label} · ${description}${revision ? ' saved' : ' already set'}`, {
+        revisionId: revision?.id, clipIds: [clip.id], animated,
       });
       emitClipChanges(next, new Set(revision ? [clip.id] : []), [entry], revision ? [revision] : [], [], { strict: true });
       if (revision) snapshot(p);
       Object.assign(p, next);
       return [text(JSON.stringify({ execution_id: executionId, status: phase, project_id: p.id,
-        clip_id: clip.id, revision_id: revision?.id, scale: zoom, x, y,
+        clip_id: clip.id, revision_id: revision?.id, ...placement,
         started_at: startedAt, applied_at: entry.ts }))];
     } catch (e) {
       const entry = activity(p, 'failed', `Reframe failed · ${e.message}`);
@@ -1210,7 +1221,7 @@ export function startDaemon() {
       const url = new URL(req.url, BASE); const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
       if (req.method === 'GET') {
         if (url.pathname === '/') return sendFile(req, res, path.join(UI_DIR, 'index.html'));
-        if (['app.js', 'text-draw.js', 'effects.js', 'live-graphics.js', 'timeline-groups.js', 'revision-controls.js', 'canvas-geometry.js', 'clip-move.js', 'official-brand-assets.js', 'fx-render.html', 'style.css', 'favicon.svg'].includes(parts[0]) && parts.length === 1) return sendFile(req, res, path.join(UI_DIR, parts[0]));
+        if (['app.js', 'text-draw.js', 'effects.js', 'live-graphics.js', 'timeline-groups.js', 'revision-controls.js', 'canvas-geometry.js', 'clip-move.js', 'clip-reframe.js', 'official-brand-assets.js', 'fx-render.html', 'style.css', 'favicon.svg'].includes(parts[0]) && parts.length === 1) return sendFile(req, res, path.join(UI_DIR, parts[0]));
         if ((parts[0] === 'fxin' || (parts[0] === 'api' && parts[1] === 'fxjob')) && await handleJobRequest(req, res, parts, body)) return;
         if (url.pathname === '/api/ping') return json(res, { name: 'frame', version: VERSION, pid: process.pid, clients: clients.size });
         if (url.pathname === '/api/packs') return json(res, { packs: packs.listPacks() });
