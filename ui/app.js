@@ -32,6 +32,15 @@ let drag = null;         // in-progress manual drag (overrides server state for 
 let renderView = null;   // render id being played
 const envCache = {};
 const seenUi = new Set();
+let presenting = new URLSearchParams(location.search).has('present');
+function setPresentation() {
+  document.body.classList.toggle('presenting', presenting);
+  $('#present').setAttribute('aria-pressed', String(presenting));
+  $('#present').textContent = presenting ? 'Exit presentation' : 'Present';
+  if (P) renderTimeline();
+}
+$('#present').onclick = () => { presenting = !presenting; setPresentation(); };
+setPresentation();
 
 // ───────────────────────── state stream
 function connect() {
@@ -43,7 +52,7 @@ let timelineLayoutKey = "", previewTracks = [];
 function onState(m) {
   const switched = !P || !m.project || P.id !== m.project.id;
   P = m.project; lastCallAt = m.lastCallAt || lastCallAt;
-  if (switched) { known = new Set(); knownFeed = new Set(); $('#feed').innerHTML = ''; sel = null; T = Math.max(0, Number(new URLSearchParams(location.search).get('t')) || 0); firstState = true; autoFit = true; renderView = null; showRender(null); }
+  if (switched) { known = new Set(); knownFeed = new Set(); $('#feed').innerHTML = ''; $('#timelineActivity').hidden = true; sel = null; T = Math.max(0, Number(new URLSearchParams(location.search).get('t')) || 0); firstState = true; autoFit = true; renderView = null; showRender(null); }
   renderProjects(m.projects || []);
   $('#empty').hidden = !!(P && (P.clips.length || Object.keys(P.assets).length));
   if (!P) { $('#empty').hidden = false; return; }
@@ -53,13 +62,17 @@ function onState(m) {
   const byTrack = new Map(P.tracks.map(track => [track, []]));
   for (const c of P.clips) byTrack.get(c.track)?.push(c);
   previewTracks = [...byTrack].sort(([a],[b]) => order(a)-order(b)).map(([,list])=>list.sort((a,b)=>a.start-b.start));
-  const layout = JSON.stringify([P.tracks, P.markers, P.clips.map(c=>[c.id,c.track,c.start,c.in,c.out,c.speed,c.label])]);
+  const layout = JSON.stringify([P.tracks, P.trackLabels, P.markers, P.clips.map(c =>
+    [c.id, c.track, c.start, c.in, c.out, c.speed, c.label,
+      presenting ? (c.text?.content ?? c.effect?.params?.nodes?.[0]?.text) : null])]);
+  const newActivity = switched ? [] : P.feed.filter(e => !knownFeed.has(e.id));
   renderBin(); renderGen(); renderSteps(); renderFeed();
   if (switched || layout !== timelineLayoutKey) {
     timelineLayoutKey = layout;
     renderTimeline();
   }
   if (!textEditor) renderInspector();
+  showTimelineActivity(newActivity);
   renderStatus(); rasterizeTexts();
   if (m.focus) focus(m.focus);
   if (m.focuses) for (const f of m.focuses) focus(f);
@@ -76,15 +89,16 @@ function onProjectDelta(m) {
     const byId = new Map(m.clips.map(c=>[c.id,c]));
     P.clips = P.clips.map(c=>byId.get(c.id) || c);
     previewTracks = previewTracks.map(track=>track.map(c=>byId.get(c.id) || c));
+    for (const c of m.clips) {
+      const cell = $('#rows').querySelector(`.clip[data-id="${CSS.escape(c.id)}"]`);
+      if (cell && presenting) cell.replaceWith(clipEl(c, laneH(c.track)));
+    }
   }
   if (m.revisions?.length) P.revisions = [...(P.revisions || []), ...m.revisions].slice(-300);
   if (m.feedEntries?.length) {
     P.feed = [...P.feed, ...m.feedEntries].slice(-800);
     renderFeed();
-    for (const entry of m.feedEntries.filter(e => e.op === 'frame_revise_title' && e.phase === 'applied')) {
-      const clip = $('#rows').querySelector(`[data-id="${entry.clipIds[0]}"]`) || $('#rows').querySelector('[data-group="graphics"]');
-      clip?.animate([{ boxShadow: 'inset 0 0 0 2px white' }, { boxShadow: 'inset 0 0 0 2px transparent' }], 900);
-    }
+    showTimelineActivity(m.feedEntries);
   }
   for (const f of m.focuses || []) focus(f);
   if (m.clips?.length) {
@@ -96,6 +110,37 @@ function onProjectDelta(m) {
     processPromptJobs(m.promptJobs);
   }
   renderStatus();
+}
+
+function showTimelineActivity(entries) {
+  const status = $('#timelineActivity');
+  for (const entry of entries) {
+    if (entry.kind !== 'op' || !entry.op) continue;
+    const titleTask = entry.op === 'frame_revise_title';
+    if (!titleTask && !presenting) continue;
+    const owner = entry.actor === 'user' ? 'You' : entry.agent || 'FRAME';
+    const label = P.clips.find(c => entry.clipIds?.includes(c.id))?.label;
+    const message = titleTask
+      ? ({ started: 'Revising title', applied: `${label || 'Title'} saved`, failed: 'Title edit failed', unchanged: 'Title already matches' })[entry.phase]
+      : `${entry.op.replaceAll('_', ' ')}${label ? ' · ' + label : ''}`;
+    if (!message) continue;
+    status.textContent = `${owner} · ${message}`;
+    status.dataset.phase = entry.phase || 'applied';
+    status.title = entry.text;
+    status.hidden = false;
+    for (const id of entry.clipIds || []) {
+      const clip = $('#rows').querySelector(`.clip[data-id="${CSS.escape(id)}"]`) || $('#rows').querySelector('[data-group="graphics"]');
+      if (!clip) continue;
+      clip.animate([{ boxShadow: 'inset 0 0 0 3px white' }, { boxShadow: 'inset 0 0 0 3px transparent' }], 1700);
+      if (presenting) {
+        clip.querySelector('.clipTask')?.remove();
+        const badge = el('span', 'clipTask');
+        badge.textContent = titleTask ? 'FRAME · Title edit' : owner;
+        clip.append(badge);
+        setTimeout(() => badge.remove(), 2200);
+      }
+    }
+  }
 }
 
 function renderProjects(list) {
@@ -306,7 +351,7 @@ composer.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventD
 
 // ───────────────────────── timeline
 const expandedGraphicGroups = new Set();
-const laneH = (t) => (P?.clips.some(c => c.track === t && c.effect?.type === 'live_graphic') ? 40 : t[0] === 'V' ? 50 : t[0] === 'T' ? 26 : 38);
+const laneH = (t) => presenting ? 37 : (P?.clips.some(c => c.track === t && c.effect?.type === 'live_graphic') ? 40 : t[0] === 'V' ? 50 : t[0] === 'T' ? 26 : 38);
 const view = (c) => (drag && drag.id === c.id ? { ...c, ...drag.cur } : textDrag && textDrag.c.id === c.id ? textDrag.c : c); // a caption being dragged in the preview keeps its live position
 function fitPps() { const w = $('#scroll').clientWidth - 30; return clamp(w / Math.max(P?.duration || 0, 8), 4, 400); }
 function renderTimeline() {
@@ -321,7 +366,10 @@ function renderTimeline() {
   for (let t = 0; t <= total; t += step) { const i = el('i', '', tc(t).replace(/\.00$/, '')); i.style.left = `${t * pps}px`; ruler.append(i); }
   // lanes
   const heads = $('#heads'), rows = $('#rows'); heads.innerHTML = ''; rows.innerHTML = '';
-  for (const item of timelineRows(P,expandedGraphicGroups)) {
+  const items = presenting
+    ? P.tracks.filter(track => P.clips.some(c => c.track === track)).map(track => ({ kind: 'track', track }))
+    : timelineRows(P, expandedGraphicGroups);
+  for (const item of items) {
     if(item.kind === 'track') {
       const t=item.track;
       const h = el('div', '', esc(P.trackLabels?.[t] || ({V1:'Footage',T1:'Captions',A1:'Audio'}[t]) || t)); h.title = `${t} · ${P.trackLabels?.[t] || t}`; h.style.height = `${laneH(t)}px`; heads.append(h);
@@ -371,7 +419,7 @@ function clipEl(raw, h) {
   if (c.kind === 'text') d.append(el('span', 'lb', esc(c.text.content)));
   else if (c.kind === 'effect') {
     const fx = EFFECTS[c.effect?.type];
-    if (c.effect?.type === 'live_graphic') {
+    if (c.effect?.type === 'live_graphic' && !presenting) {
       const strip = document.createElement('canvas'); strip.width = Math.min(2400, Math.ceil(w)); strip.height = h - 6;
       const g = strip.getContext('2d'), tileW = (h - 6) * P.width / P.height;
       const count = Math.ceil(strip.width / tileW);
@@ -385,11 +433,14 @@ function clipEl(raw, h) {
       }
       strip.title='Live design thumbnails — scrub here to preview'; d.append(strip);
     }
-    d.append(el('span', 'lb', esc(c.label || fx?.label || c.effect?.type)));
+    const node = c.effect?.type === 'live_graphic' && c.effect.params.nodes.length === 1 && c.effect.params.nodes[0];
+    const title = presenting && node?.kind === 'text' && !node.text?.includes('{v}') ? node.text?.replaceAll('\n', ' / ') : null;
+    const label = c.label || fx?.label || c.effect?.type;
+    d.append(el('span', 'lb', esc(title ? `${label} · ${title}` : label)));
     const u = P.clips.find((x) => x.track === (c.source || 'V1') && x.kind === 'video' && x.start < end(c) && end(x) > c.start), a = u && P.assets[u.asset];
     d.append(el('span', 'fx', fx?.needs === 'cutout' && !a?.cutout ? 'NEEDS CUTOUT' : 'FX'));
   } else {
-    if (a?.thumbs) {
+    if (a?.thumbs && c.kind !== 'audio') {
       const tiles = el('div', 'tiles'); const n = clamp(Math.ceil(w / (h * 0.62)), 1, 40);
       for (let k = 0; k < n; k++) {
         const i = el('i'); const t = c.kind === 'image' ? 0 : c.in + ((k + 0.5) / n) * (c.out - c.in);

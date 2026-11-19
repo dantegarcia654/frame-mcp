@@ -61,29 +61,34 @@ export default async function ({ out, evaluate, sleep, mark }) {
   try {
     assert.equal((await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'FRAME test', version: '1' } })).serverInfo.name, 'frame');
     assert((await rpc('tools/list')).tools.some(t => t.name === 'frame_revise_title'));
+    await evaluate("document.querySelector('#present').click()");
     const seed = await seedDemo(dir);
     const { project_id } = seed;
     report.setup = { ...seed, source: path.basename(seed.source) };
-    const before = await until('active demo project', async () => { const p = await project(); return p?.id === project_id && p.clips.length === 4 && p; });
+    const before = await until('active demo project', async () => { const p = await project(); return p?.id === project_id && p.clips.length === 5 && p; });
     const target = before.clips.find(c => c.label === 'Main title');
+    assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('#rows .lane')).map(e => e.dataset.track).sort()"), ['A1', 'V1', 'V2', 'V3', 'V4']);
     report.exports = { before: await render(project_id) };
 
     // Start one pass and instrument the actual HTML media element once it is playing.
     await evaluate("document.querySelector('#loop').checked = true; __frame.seek(0); document.querySelector('#play').click()");
-    await until('playing source', () => evaluate('__frame.T > 1.2 && [...__frame.slots.values()].some(s => s.used && !s.el.paused && s.el.readyState >= 3)'));
+    await until('playing source', () => evaluate('__frame.T > 1.2 && [...__frame.slots.values()].filter(s => s.used && !s.el.paused && s.el.readyState >= 3).length === 2'));
     await evaluate(`(() => {
-      const video = [...__frame.slots.values()].find(s => s.used).el;
+      const active = [...__frame.slots.values()].filter(s => s.used).map(s => s.el);
       const events = [];
-      for (const type of ['pause','seeking','waiting','stalled','emptied','loadstart','volumechange','ratechange']) {
-        video.addEventListener(type, () => events.push({ type, t: __frame.T }));
+      for (const media of active) {
+        for (const type of ['pause','seeking','waiting','stalled','emptied','loadstart','volumechange','ratechange']) {
+          media.addEventListener(type, () => events.push({ type, media: media.tagName, t: __frame.T }));
+        }
       }
-      window.liveWatch = { video, events, before: { t: __frame.T, media: video.currentTime, at: Date.now() } };
+      window.liveWatch = { active, events, before: { t: __frame.T, media: active.map(m => m.currentTime), at: Date.now() } };
     })()`);
     const request = { project_id, label: 'Main title' };
     const failed = await call('frame_revise_title', { ...request, patch: { text: 'INVALID', size: 0.8 } });
     assert(failed.isError && /outside/.test(failed.content[0].text), failed.content[0].text);
     const rejected = await until('failed activity', () => evaluate('__frame.P.feed.findLast(e => e.op === "frame_revise_title" && e.phase === "failed")'));
     report.stages.invalid = { at: rejected.ts, message: rejected.text };
+    assert.match(await evaluate("document.querySelector('#timelineActivity').textContent"), /Title edit failed/);
     assert.deepEqual((await project()).clips, before.clips);
     assert.equal(await evaluate(browserFrame), null);
     savePng('before-playing.png', await evaluate("document.querySelector('#viewer').toDataURL()"));
@@ -95,6 +100,12 @@ export default async function ({ out, evaluate, sleep, mark }) {
     const applied = JSON.parse(edited.content[0].text);
     assert.equal(applied.status, 'applied');
     const first = await until('revised canvas pixels during playback', () => evaluate(browserFrame), 2500);
+    const cell = `document.querySelector('[data-id="${target.id}"]')`;
+    assert.match(await evaluate(`${cell}.querySelector('.lb').textContent`), /STILL \/ ROLLING/);
+    assert.equal(await evaluate(`${cell}.querySelector('.clipTask').textContent`), 'FRAME · Title edit');
+    assert.match(await evaluate("document.querySelector('#timelineActivity').textContent"), /FRAME · Main title saved/);
+    report.timeline = { title: await evaluate(`${cell}.querySelector('.lb').textContent`),
+      task: await evaluate("document.querySelector('#timelineActivity').textContent") };
     savePng('after-playing.png', first.png);
     mark('updated_playing_frame');
     report.stages.revision = { submittedAt, ...applied, firstVisibleAt: first.at, previewTime: first.t };
@@ -113,14 +124,16 @@ export default async function ({ out, evaluate, sleep, mark }) {
 
     await until('continuing playback', () => evaluate(`__frame.T > ${first.t} + .5`));
     const continuity = await evaluate(`(() => {
-      const w = liveWatch, video = [...__frame.slots.values()].find(s => s.used).el;
-      return { sameMedia: w.video === video, paused: video.paused, muted: video.muted, volume: video.volume,
-        before: w.before, after: { t: __frame.T, media: video.currentTime, at: Date.now() }, events: w.events };
+      const w = liveWatch, active = [...__frame.slots.values()].filter(s => s.used).map(s => s.el);
+      return { sameMedia: active.length === w.active.length && active.every((m,i) => m === w.active[i]),
+        tracks: active.map(m => ({ kind: m.tagName, paused: m.paused, muted: m.muted, volume: m.volume })),
+        before: w.before, after: { t: __frame.T, media: active.map(m => m.currentTime), at: Date.now() }, events: w.events };
     })()`);
-    assert(continuity.sameMedia && !continuity.paused && !continuity.muted && continuity.volume > 0);
+    assert(continuity.sameMedia && continuity.tracks.every(m => !m.paused));
+    assert(continuity.tracks.some(m => m.kind === 'AUDIO' && !m.muted && m.volume > 0));
     assert.deepEqual(continuity.events, []);
     assert(continuity.after.t > first.t && first.t > continuity.before.t);
-    assert(Math.abs(continuity.after.media - continuity.before.media - (continuity.after.t - continuity.before.t)) < .15);
+    assert(continuity.after.media.every((t, i) => Math.abs(t - continuity.before.media[i] - (continuity.after.t - continuity.before.t)) < .15));
     report.continuity = continuity;
     const unchanged = await call('frame_revise_title', { ...request, patch });
     assert.equal(JSON.parse(unchanged.content[0].text).status, 'unchanged');

@@ -28,18 +28,23 @@ export async function seedDemo(dir, input) {
       '-vf', 'drawgrid=w=80:h=80:t=1:c=white@0.12', '-af', 'volume=0.12',
       '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart', source]);
   }
+  const audio = path.join(dir, 'source-audio.wav');
+  execFileSync('ffmpeg', ['-v', 'error', '-n', '-i', source, '-map', '0:a:0', '-t', '10', '-c:a', 'pcm_s16le', audio]);
   const preparationMs = Date.now() - preparationStarted;
   const setupStarted = Date.now();
   const session = await tool('frame_start', { name: input ? 'Live title rehearsal' : 'Live title · synthetic sample', aspect: '960x540', fps: 24 });
   const project_id = session.match(/\((p_\w+)\)/)?.[1];
   if (!project_id) throw new Error('FRAME did not return a project ID.');
-  await tool('frame_import', { project_id, paths: [source], prepare: false, decide: false, actor: 'frame' });
+  await tool('frame_import', { project_id, paths: [source, audio], prepare: false, decide: false, actor: 'frame' });
   const graphic = (label, track, start, duration, nodes) => ({
     op: 'add_effect', effect: 'live_graphic', label, track, start, duration, params: { nodes },
   });
   const copy = (id, text, x, y, size, color) => ({ kind: 'text', id, x, y, text, size, color, weight: 700, font: 'sans' });
-  await tool('frame_edit', { project_id, agent: 'Demo setup script', fast: true, ops: [
-    { op: 'add_clip', asset: 'a1', in: 0, out: 10 },
+  await tool('frame_edit', { project_id, agent: 'Demo setup script', ops: [
+    ...[['V1', 'Footage'], ['V2', 'Treatment'], ['V3', 'Title'], ['V4', 'Counter'], ['A1', 'Audio']]
+      .map(([track, name]) => ({ op: 'name_track', track, name })),
+    { op: 'add_clip', asset: 'a1', in: 0, out: 10, muted: true, label: 'Source footage' },
+    { op: 'add_clip', asset: 'a2', in: 0, out: 10, track: 'A1', label: 'Source audio' },
     graphic('Treatment', 'V2', 0, 10, [
       { id: 'shade', kind: 'rect', x: 0, y: 0, w: .70, h: 1, fill: '#13131d', anim: [{t: 0, a: .55}, {t: 10, a: .4}] },
       { id: 'rule', kind: 'line', x: .08, y: .37, w: .48, lineWidth: .005, color: '#ff536b',
