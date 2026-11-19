@@ -8,13 +8,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { findChrome } from '../src/text.js';
 
 const out = path.resolve(process.argv[2] || 'frame-demo.mp4');
 const size = (process.argv.includes('--size') ? process.argv[process.argv.indexOf('--size') + 1] : '1600x900').split('x').map(Number);
 const url = `http://127.0.0.1:${process.env.FRAME_PORT || 4747}`;
-const windows = [process.env.PROGRAMFILES, process.env['PROGRAMFILES(X86)'], process.env.LOCALAPPDATA].filter(Boolean)
-  .flatMap((d) => [path.join(d, 'Google/Chrome/Application/chrome.exe'), path.join(d, 'Microsoft/Edge/Application/msedge.exe')]);
-const chrome = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', ...windows].find((p) => fs.existsSync(p));
+const chrome = findChrome();
 if (!chrome) { console.error('Chrome not found.'); process.exit(1); }
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'frame-rec-'));
 const port = 9333 + Math.floor(Math.random() * 500);
@@ -39,7 +38,7 @@ ws.onmessage = (ev) => {
   send('Page.screencastFrameAck', { sessionId: m.params.sessionId });
 };
 
-let done = false; const marks = {};
+let done = false, scriptFailed = false; const marks = {};
 async function finish() {
   if (done) return; done = true;
   try { ws.close(); } catch {} proc.kill();
@@ -50,7 +49,7 @@ async function finish() {
   if (Object.keys(marks).length) fs.writeFileSync(out + '.marks.json', JSON.stringify({ span: frames.at(-1).t - frames[0].t, marks: Object.fromEntries(Object.entries(marks).map(([k, v]) => [k, +(v - frames[0].t).toFixed(2)])) }, null, 1));
   fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(out + '.stop', { force: true });
   console.log(r.status === 0 ? `saved ${out} (${frames.length} frames, ${(frames.at(-1).t - frames[0].t).toFixed(1)}s)` : 'encode failed');
-  process.exit(r.status ?? 1);
+  process.exit(scriptFailed ? 1 : r.status ?? 1);
 }
 process.on('SIGINT', finish); process.on('SIGTERM', finish);
 setInterval(() => { if (fs.existsSync(out + '.stop')) finish(); }, 500);
@@ -58,7 +57,11 @@ setInterval(() => { if (fs.existsSync(out + '.stop')) finish(); }, 500);
 const scriptArg = process.argv.includes('--script') && process.argv[process.argv.indexOf('--script') + 1];
 if (scriptArg) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const evaluate = async (expression) => (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }))?.result?.value;
+  const evaluate = async (expression) => {
+    const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+    if (result?.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+    return result?.result?.value;
+  };
   let mx = 0, my = 0;
   const mouse = {
     async move(x, y, ms = 500) { const n = Math.max(2, Math.round(ms / 16)), x0 = mx, y0 = my; for (let i = 1; i <= n; i++) { const k = i / n, e = k * k * (3 - 2 * k); mx = x0 + (x - x0) * e; my = y0 + (y - y0) * e; await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: mx, y: my, buttons: this.down ? 1 : 0, button: this.down ? 'left' : 'none' }); await sleep(16); } },
@@ -69,6 +72,6 @@ if (scriptArg) {
   await sleep(1500);
   // A visible pointer: headless Chrome draws none.
   await evaluate(`(() => { const c = document.createElement('div'); c.innerHTML = '<svg viewBox="0 0 12 16" width="18" height="24"><path d="M0 0v13l3.6-3.2L6 16l2.2-.9-2.4-6H11z" fill="#fff" stroke="#000"/></svg>'; c.style.cssText = 'position:fixed;left:0;top:0;z-index:999;pointer-events:none'; document.body.append(c); addEventListener('mousemove', (e) => { c.style.transform = 'translate(' + e.clientX + 'px,' + e.clientY + 'px)'; }, true); })()`);
-  try { await (await import(pathToFileURL(path.resolve(scriptArg)).href)).default({ send, evaluate, mouse, sleep, mark: (name) => { marks[name] = Date.now() / 1000; } }); } catch (e) { console.error('script error:', e.message); }
+  try { await (await import(pathToFileURL(path.resolve(scriptArg)).href)).default({ out, send, evaluate, mouse, sleep, mark: (name) => { marks[name] = Date.now() / 1000; } }); } catch (e) { scriptFailed = true; console.error('script error:', e.message); }
   await sleep(600); finish();
 }

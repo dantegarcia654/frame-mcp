@@ -1,7 +1,7 @@
 // What Claude sees. These descriptions are the whole contract between Claude and Frame.
 export const INSTRUCTIONS = `Frame is a live editing room. The user watches a real timeline fill in while you edit, and can stop, steer or hand-edit at any moment.
 
-USE FRAME FOR EVERY VIDEO EDITING TASK. The moment the user asks to edit, cut, assemble, caption, grade or render a video, call frame_start FIRST — before analysing anything — so the window is open while you think. Do not edit video with hidden shell scripts when Frame can do it.
+USE FRAME FOR EVERY VIDEO EDITING TASK. Start new work with frame_start. For a live title change in an already open project, call frame_revise_title with its project ID while the user keeps playing. Do not reopen the project or render until asked. Do not edit video with hidden shell scripts when Frame can do it.
 
 How to work:
 1. frame_start → opens the window. Pass your plan.
@@ -24,8 +24,25 @@ const pid = { project_id: { type: 'string', description: 'Optional. Defaults to 
 const why = { why: { type: 'string', description: 'One short sentence shown to the user explaining this choice.' } };
 
 export const TOOLS = [
-  {name:'frame_prompt',description:'Deploy an independent visible prompt cursor immediately. Natural language routes through Google Decisions; exact element-id: property=value skips routing. The open canvas executes the same contextual controls used by the human. A second call can route concurrently. Poll frame_prompt_jobs.',inputSchema:{type:'object',required:['prompt'],properties:{...pid,prompt:{type:'string'},clip_id:{type:'string'},playhead:{type:'number'},cursor:{type:'string',description:'Reuse a named cursor across related edits.'}}}},
+  {name:'frame_prompt',description:'Deploy an independent visible prompt cursor immediately. Change the Main title to "New wording" works locally for one on-screen single-node text layer labelled Main title; include the playhead. Other natural language routes through Google Decisions; exact element-id: property=value also works locally. The open canvas executes the same contextual controls used by the human. A second call can route concurrently. Poll frame_prompt_jobs.',inputSchema:{type:'object',required:['prompt'],properties:{...pid,prompt:{type:'string'},clip_id:{type:'string'},playhead:{type:'number'},cursor:{type:'string',description:'Reuse a named cursor across related edits.'}}}},
   {name:'frame_prompt_jobs',description:'Read cursor progress, routing latency, control values, conflicts and saved revisions.',inputSchema:{type:'object',properties:{...pid}}},
+  {
+    name: 'frame_revise_title',
+    description: 'Revise one named, single-node live text graphic in the active project without moving the playhead, pausing playback, or rendering. Translate the request into explicit field values. Send only requested fields in one patch. x/y are fractions measured from the upper-left; size is a fraction of frame height. Returns measured execution and saved revision details.',
+    inputSchema: { type: 'object', required: ['project_id', 'label', 'patch'], properties: {
+      project_id: { type: 'string', description: 'The project ID already open in the browser. Get it from frame_state if needed.' },
+      label: { type: 'string', description: 'The exact name of one live title layer.' },
+      patch: { type: 'object', minProperties: 1, additionalProperties: false, properties: {
+        text: { type: 'string', minLength: 1, maxLength: 160 },
+        color: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' },
+        size: { type: 'number', minimum: 0.02, maximum: 0.3 },
+        x: { type: 'number', minimum: 0, maximum: 1 },
+        y: { type: 'number', minimum: 0, maximum: 1 },
+        weight: { type: 'integer', enum: [400, 500, 600, 700, 800] },
+        font: { type: 'string', enum: ['sans', 'serif', 'mono'] },
+      } },
+    } },
+  },
   { name:'frame_revisions', description:'Read the same persistent revision history the human sees, or revert one visual revision. Checks changed properties and preserves unrelated later edits; conflicts are reported.', inputSchema:{type:'object',properties:{...pid,action:{type:'string',enum:['list','revert']},revision_id:{type:'string'},limit:{type:'number'},agent:{type:'string'}}} },
   {
     name: 'frame_start',

@@ -71,7 +71,12 @@ When every live layer sits above all footage, export draws them as one overlay (
 
 ## Prompt routing
 
-`frame_prompt` sends natural language to Google Decisions (`gemini-decision-1`). The routing works like this:
+`frame_prompt` handles a scoped wording change locally. For example, at a playhead where one single-node text
+layer named **Main title** is on screen, enter **Change the Main title to “Take two”.** Use the full layer label
+ending in “title” and quote the new wording. If two matching titles are on screen, the prompt asks for an exact
+element ID. The local route changes only the text value.
+
+Other natural-language requests use Google Decisions (`gemini-decision-1`). The routing works like this:
 1. Candidates are single-node live clips. When the prompt names something on screen at the playhead, only on-screen clips are considered.
 2. Decisions picks the target and the control. Below 0.7 confidence the job asks for input.
 3. A colour request goes to the colour you can see: `fill` or `color`, whichever the shape has, or `accent` once its highlight is showing.
