@@ -1,6 +1,6 @@
 # FRAME review loop
 
-Working agreement: the developer and their Claude build freely; ChatGPT reviews whether the result fits FRAME; the developer's Claude answers every finding, with a fix or with reasoning and evidence. **The developer's Claude makes the final call on its own work** and records why it followed or did not follow each finding; ChatGPT's review stays on the record as advice. Dante or the developer can override that call. *(Changed from "ChatGPT makes the final review call" at gumballchief's request; this PR is where Dante accepts or rejects that change.)*
+Dante's working agreement: the developer and their Claude build freely; ChatGPT reviews whether the result fits FRAME; the developer's Claude may defend or revise its choices; ChatGPT makes the final review call. Dante can override that call.
 
 The developer owns architecture, tools, implementation sequence, and development workflow. Review the outcome and consequential tradeoffs. Do not turn personal coding preferences into blockers. A better idea is welcome when it serves the agreed user problem.
 
@@ -8,21 +8,21 @@ The developer owns architecture, tools, implementation sequence, and development
 
 Use a pull request in `dantegarcia654/frame-mcp` for each reviewable change. Code, evidence, feedback, defense, and decision belong on that PR. [Issue #14](https://github.com/dantegarcia654/frame-mcp/issues/14) is the entry point and review queue.
 
-GitHub event-triggered automation **FRAME PR review alerts** is enabled for this repository as of November 19, 2026. It handles PR opening/ready events, commit updates, reviews, and comments. It notifies Dante in ChatGPT and reviews ready submissions, posts feedback/questions, and considers developer responses. Drafts get an alert/brief until ready. No hourly polling schedule is used. Delivery latency and a full round trip have not yet been verified. Manual prompts remain available: **"review FRAME uploads"**, **"review FRAME PR #N"**, or **"read Claude's response on PR #N and give your closing review."** Telegram is optional.
+GitHub event-triggered automation **FRAME PR review alerts** is enabled for this repository as of November 19, 2026. It handles PR opening/ready events, commit updates, reviews, and comments. It notifies Dante in ChatGPT and reviews ready submissions, posts feedback/questions, and considers developer responses. Drafts get an alert/brief until ready. No hourly polling schedule is used. Delivery latency and a full round trip have not yet been verified. Manual prompts remain available: **"review FRAME uploads"**, **"review FRAME PR #N"**, or **"read Claude's response on PR #N and make the final call."** Telegram is optional.
 
-## What stays out of this public repository (proposed)
+## What stays out of this public repository
 
 This repository is public. Anything posted here, including PR text, review comments and attachments, can be read and indexed by anyone. Do not post product plans and ideas that are not built yet, business or pricing plans, partner, customer or test-user names, unreleased footage, or anything a partner shared in confidence. Code, its evidence on shareable test footage, and reviews of that code can stay here.
 
-The private discussion needs a private home. Options, for Dante and gumballchief to pick:
+That discussion needs a private home. Options, for Dante and gumballchief to pick:
 
-| Option | What changes | Works today? |
+| Option | What changes | Status |
 | --- | --- | --- |
-| A. Make `frame-mcp` private until release | Everything stays as it is, only private; flip it public at launch | Yes: both agents already read and write it through GitHub |
-| B. Keep the code public, add a private companion repo for ideas, plans and review discussion | Code PRs stay here; plans, playbooks and design debates go in the private repo, linked from PRs only by name | Yes, once both accounts are added to it |
-| C. A Telegram or Discord channel for the two agents | A bot posts PR links and review summaries; each agent reads and replies through it | Not yet: needs a bot and a bridge for each agent, and an end-to-end test |
+| A. Make `frame-mcp` private until release | The same loop, private; flip it public at launch | Conditional: after the switch, verify that the ChatGPT connector and the developer's GitHub login still read and write it and that the review automation still fires, with one test round trip |
+| B. Keep the code public, add a private companion repo for plans and design discussion | Code PRs stay here; plans and design debates go in the private repo, referenced from PRs only by name | Conditional: both human accounts added; the ChatGPT connector and the developer's GitHub login granted access to the new repo; the review automation's event subscription extended to it; then one test round trip |
+| C. A Telegram or Discord channel | A relay posts PR links and review summaries; each agent reads and replies there | Not built: bots cannot receive other bots' messages through Telegram's standard Bot API, so this needs an explicit relay design; Discord connectivity is unverified |
 
-gumballchief leans toward **C** (Telegram or Discord) for the conversation itself. Technical note from gumballchief's Claude: B works today with no new tools, while C needs a bot and a bridge built and tested end to end first, so B (or A) can carry the discussion until C is live. Until one is chosen, gumballchief's Claude will post only code and process here and keep plans off GitHub.
+The reviewer recommends B (initial review on #15); gumballchief leaned toward C. Until a channel is chosen and its round trip tested, gumballchief's Claude posts only code and process here and keeps plans off GitHub.
 
 ## Submit enough context, in any useful format
 
@@ -75,7 +75,7 @@ Remaining limits / follow-up: if material
 
 **ACCEPT** means the reviewed scope fits the agreed outcome and has sufficient evidence. **REQUEST CHANGES** means demonstrated problems require revision. **BLOCKED** means a material evidence, access, or dependency gap prevents a sound decision. Optional improvements alone do not block acceptance.
 
-The reviewer's Decision line is its closing recommendation. The developer's Claude then posts the final call on the PR as **FINAL CALL: ship / revise / drop**, with one line per finding saying whether it was followed and why. Bind every decision to the reviewed commit. Later code changes require reassessment of the affected scope. Record disagreements and why the final call followed one argument. The final review call does not itself merge, deploy, or publish anything.
+Bind every final decision to the reviewed commit. Later code changes require reassessment of the affected scope. Record disagreements and why the final call followed one argument. The final review call does not itself merge, deploy, or publish anything.
 
 ## Current setup boundary
 

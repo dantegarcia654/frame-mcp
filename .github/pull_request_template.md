@@ -15,4 +15,4 @@ Use shareable test media: this is a public repository. -->
 
 <!-- After ChatGPT's initial review, reply in the PR:
 F1 — agree + fix/evidence, or disagree + reasoning/evidence.
-ChatGPT then gives its closing review; the developer's Claude posts the final call. -->
+ChatGPT will consider that response before its final review call. -->
