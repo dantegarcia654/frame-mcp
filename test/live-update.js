@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cameraAt } from '../ui/clip-reframe.js';
+import { animAt } from '../ui/live-graphics.js';
 import { tmpdir } from 'node:os';
 import { setTimeout as wait } from 'node:timers/promises';
 
@@ -93,6 +95,32 @@ try {
   assert.equal(changed.clips[0].effect.params.nodes[0].text, 'Take two');
   await addTitle();
   assert.match((await titlePrompt(3, 'needs_input')).phase, /More than one matching title/);
+  const image = home + '/one.png';
+  await writeFile(image, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jWZkAAAAASUVORK5CYII=', 'base64'));
+  await call('frame_import', { paths: [image], prepare: false, decide: false });
+  await call('frame_edit', { ops: [{ op:'add_clip', asset:'a1', duration:4, label:'Picture' }] });
+  const picture = await until(() => events.findLast(e => e.project?.clips.some(c => c.label === 'Picture'))
+    ?.project.clips.find(c => c.label === 'Picture'));
+  const keyframes = [{ t: .3, zoom: 1, x: .5, y: .5 }, { t: .98, zoom: 1.06, x:.5, y:.5, e:'out' }];
+  const anim = [{ t: .2, y: 8/540, a: 0 }, { t: .56, y: 0, a: 1, e:'out4' }];
+  const start = events.length;
+  await call('frame_edit', { fast:true, ops:[
+    { op:'update_clip', id:picture.id, reframe:{keyframes}, ripple:false },
+    { op:'patch_graphic', id:title.clip_id, node_id:title.node_id, patch:{at:.2,anim} },
+  ] });
+  const delta = await until(() => events.slice(start).find(e => e.type === 'project_delta' && e.clips?.length === 2));
+  assert.equal(events.slice(start).filter(e => e.type === 'state').length, 0);
+  assert.equal(delta.revisions.length, 2);
+  const crop = delta.clips.find(c => c.id === picture.id);
+  const graphic = delta.clips.find(c => c.id === title.clip_id).effect.params.nodes[0];
+  assert.deepEqual(crop.reframe.keyframes.map(k => k.zoom), [1,1.06]);
+  assert(Math.abs(cameraAt(crop.reframe, .64).zoom - 1.0525) < 1e-8);
+  assert.deepEqual(graphic.anim, anim);
+  assert.equal(graphic.at, .2);
+  assert(Math.abs(animAt(graphic, .38).a - .9375) < 1e-8);
+  const persisted = JSON.parse(await readFile(home+'/projects/'+initial.project.id+'/project.json','utf8'));
+  for (const clip of delta.clips) assert.deepEqual(persisted.clips.find(c => c.id === clip.id), clip);
+
   stop.abort();
   await read;
   console.log('Live update smoke passed: compact deltas, concurrent prompts, one claim owner, durable canvas revisions, and scoped title routing.');

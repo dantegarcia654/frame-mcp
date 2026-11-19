@@ -161,7 +161,7 @@ function renderStatus() {
   if (r && r.status === 'rendering') { bar.hidden = false; bar.querySelector('i').style.width = `${Math.round((r.progress || 0) * 100)}%`; bar.querySelector('span').textContent = `RENDERING ${Math.round((r.progress || 0) * 100)}%`; }
   else bar.hidden = true;
   const activeJobs=(P.promptJobs||[]).filter(j=>['routing','ready','executing'].includes(j.status));
-  $('#pending').textContent = activeJobs.length ? `${activeJobs.length} prompts running · send another anytime` : 'Canvas changes run immediately. Review shows exact controls and values.';
+  $('#pending').textContent = activeJobs.length ? `${activeJobs.length} prompts running · send another anytime` : 'Enter sends to canvas.';
   if (P.paused) return setStatus('hold', 'Paused by you');
   if (r && r.status === 'rendering') return setStatus('live', `Rendering ${Math.round((r.progress || 0) * 100)}%`);
   if (P.status.state === 'waiting') return setStatus('hold', 'Claude is waiting for you');
@@ -347,8 +347,22 @@ function renderFeed() {
   if (stick || firstState) box.scrollTop = box.scrollHeight;
 }
 const composer = $('#composer textarea');
-function sendMessage() { const v = composer.value.trim(); if (!v || !P) return; post({ action: 'prompt', text: v, t: T, clip: sel }); composer.value = ''; }
-$('#composer').onsubmit = (e) => { e.preventDefault(); sendMessage(); };
+function sendMessage(action = 'prompt') {
+  const message = composer.value.trim();
+  if (!message || !P) return;
+  composer.value = '';
+  post({ action, text: message, t: T, clip: sel }).then(result => {
+    if (result.error && !composer.value) composer.value = message;
+    if (result.ok && action === 'message') toast('Queued for the connected agent.');
+  }).catch(() => {
+    if (!composer.value) composer.value = message;
+    toast('Could not send the message. Try again.');
+  });
+}
+$('#composer').onsubmit = (e) => {
+  e.preventDefault();
+  sendMessage(e.submitter?.id === 'sendAgent' ? 'message' : 'prompt');
+};
 composer.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } };
 
 // ───────────────────────── timeline
@@ -1144,7 +1158,6 @@ canvasTools.addEventListener('focusout',()=>queueMicrotask(()=>{renderCanvasTool
 const promptClientId=crypto.randomUUID(),promptInProgress=new Set();
 const isAutomationCheck = new URLSearchParams(location.search).has('automation_check');let canvasExecution=Promise.resolve();
 const livePrompts=el('div','livePrompts');livePrompts.id='livePrompts';$('#feed').before(livePrompts);
-composer.placeholder='Describe a canvas change… Send another prompt while this one runs.';
 function promptCursor(job,target){
  let r=roleCursors.get(job.cursor);if(!r){const cur=$('#cursor').cloneNode(true);cur.removeAttribute('id');cur.classList.add('editCursor','promptCursor');document.body.append(cur);r={cur,timer:null};roleCursors.set(job.cursor,r);}
  const box=target.getBoundingClientRect();r.cur.querySelector('span').textContent=`${job.cursor} · ${job.phase}`;r.cur.style.opacity=1;r.cur.style.transform=`translate3d(${clamp(box.left+Math.min(box.width/2,30),0,Math.max(0,innerWidth-185))}px,${clamp(box.top+Math.min(box.height/2,18),0,innerHeight-30)}px,0)`;clearTimeout(r.timer);r.timer=setTimeout(()=>r.cur.style.opacity=0,8000);

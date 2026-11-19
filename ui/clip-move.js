@@ -1,10 +1,16 @@
 // Keyframed position for footage clips (a face sliding into the bottom half, a panel sliding out).
 // clip.move = [{ t, x?, y?, e? }]: t in seconds from the clip's start on the timeline, x/y offsets in frame fractions
 // added to the clip's own x/y, e the ease INTO that keyframe. Shared by the window (ui/app.js) and export (src/render.js).
-export const MOVE_EASES = ['lin', 'out', 'in', 'io'];
-const E = { lin: (q) => q, out: (q) => 1 - (1 - q) ** 3, in: (q) => q ** 3, io: (q) => (q < .5 ? 4 * q ** 3 : 1 - (-2 * q + 2) ** 3 / 2) };
+export const MOVE_CURVES = {
+  lin: q => q,
+  out: q => 1 - (1 - q) ** 3,
+  in: q => q ** 3,
+  io: q => q < .5 ? 4 * q ** 3 : 1 - (-2 * q + 2) ** 3 / 2,
+  out4: q => 1 - (1 - q) ** 4,
+};
+export const MOVE_EASES = Object.keys(MOVE_CURVES);
 
-export const easeProgress = (ease, q) => E[ease || 'lin'](q);
+export const easeProgress = (ease, q) => MOVE_CURVES[ease || 'lin'](q);
 export const easeExpression = (ease, q) => ({
   lin: q, out: `(1-pow(1-${q},3))`, in: `pow(${q},3)`,
   io: `if(lt(${q},0.5),4*pow(${q},3),1-pow(-2*${q}+2,3)/2)`,

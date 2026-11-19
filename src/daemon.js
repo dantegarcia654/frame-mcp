@@ -842,7 +842,8 @@ const handlers = {
     const fast = a.fast === true, focuses = new Map(), touched = new Set();
     const feedEntries = [], revisions = [];
     const clipDelta = fast && a.ops.every(op => op.op === 'patch_graphic' ||
-      (op.op === 'update_clip' && op.params && Object.keys(op).every(k=>['op','id','params','agent','why','ripple'].includes(k))));
+      (op.op === 'update_clip' && (op.params || Object.hasOwn(op, 'reframe'))
+        && Object.keys(op).every(k => ['op', 'id', 'params', 'reframe', 'agent', 'why', 'ripple'].includes(k))));
     if (a.summary) { feedEntries.push(feed(p, { kind: 'decision', text: a.summary, agent: a.agent })); if (!fast) { emit(p); if (PACE > 0) await sleep(PACE); } }
     const results = [];
     for (let i = 0; i < a.ops.length; i++) {
