@@ -1,3 +1,4 @@
+import { drawNodes, validateNodes } from './live-graphics.js';
 // The one place effect pixels come from.
 // The window imports this to preview effect clips live. The service runs this same file in headless Chrome to draw the
 // frames that frame_view and the render composite (src/effects.js). Same code both ways: what you preview is what ships.
@@ -201,6 +202,30 @@ const WHERE = {
 };
 
 export const EFFECTS = {
+  live_graphic: {
+    label: 'Live graphic', input: false,
+    about: 'Editable vector layers drawn live. Change nodes or palette without encoding. Export uses this same canvas renderer.',
+    params: { nodes: list('Declarative timed rect, line, text, invader and slider layers; unique ids, normalized geometry and spoken-word cues') },
+    draw(g, f, P) { drawNodes(g, f, P.nodes); },
+  },
+  // Export only (src/effects.js liveStack): all live graphic layers of a timeline drawn as one overlay, each in its own clip time.
+  live_stack: {
+    label: 'Live layers', input: false, hidden: true,
+    about: 'All live graphic layers drawn together for export. Built by the service, never placed by hand.',
+    params: { layers: list('Live graphic layers with their timeline start/end, clip in, opacity and fades') },
+    draw(g, f, P) {
+      const T = f.t;
+      for (const L of P.layers) {
+        if (T < L.s - 1e-6 || T >= L.e - 1e-6) continue;
+        const lt = T - L.s, d = L.e - L.s; let k = L.o ?? 1;
+        if (L.fi && lt < L.fi) k *= Math.max(0, lt / L.fi);
+        if (L.fo && lt > d - L.fo) k *= Math.max(0, (d - lt) / L.fo);
+        if (k <= 0) continue;
+        g.save(); g.globalAlpha *= Math.min(1, k);
+        try { drawNodes(g, { ...f, t: L.i + lt }, L.nodes); } finally { g.restore(); }
+      }
+    },
+  },
   clone_row: {
     label: 'Clone row', needs: 'cutout', opaque: true, say: ['clone row', 'clone rows'],
     about: 'Copies of the person step out from behind them to both sides, each a little smaller, darker and softer with distance — lit like the room, with no cut-out halo.',
@@ -717,6 +742,7 @@ const CODE = (EFFECTS.code_body.draw.toString() + EFFECTS.orbit_text.draw.toStri
 
 /** Defaults for an effect, merged with what is set. Throws a plain explanation for anything unknown or out of range. */
 export function effectParams(type, given = {}, current = null) {
+  if (type === 'live_graphic' && given.nodes !== undefined) validateNodes(given.nodes);
   const fx = EFFECTS[type];
   if (!fx) throw new Error(`No effect "${type}". Effects: ${Object.keys(EFFECTS).join(', ')}.`);
   const out = current ? { ...current } : Object.fromEntries(Object.entries(fx.params).map(([k, s]) => [k, s.default]));
@@ -735,13 +761,14 @@ export function effectParams(type, given = {}, current = null) {
       if (!/^#[0-9a-f]{6}$/i.test(String(v))) throw new Error(`${type}.${k} must be a colour like #ffffff (got ${JSON.stringify(v)}). Nothing was changed.`);
       out[k] = String(v).toLowerCase();
     } else if (s.kind === 'list') {
-      if (!Array.isArray(v) || v.length > 400 || v.some((x) => !x || typeof x !== 'object') || JSON.stringify(v).length > 100000) throw new Error(`${type}.${k} must be a list of objects (at most 400). Nothing was changed.`);
+      if (!Array.isArray(v) || v.length > 400 || v.some((x) => !x || typeof x !== 'object') || JSON.stringify(v).length > 400000) throw new Error(`${type}.${k} must be a list of at most 400 objects and 400 KB. Nothing was changed.`);
       out[k] = JSON.parse(JSON.stringify(v));
     } else if (s.kind === 'asset') {
       if (!/^[\w:.-]*$/.test(String(v ?? ''))) throw new Error(`${type}.${k} must be an asset id like "a2" (got ${JSON.stringify(v)}). Nothing was changed.`);
       out[k] = String(v ?? '');
     } else out[k] = String(v ?? '').slice(0, 200);
   }
+  if (type === 'live_graphic') validateNodes(out.nodes);
   return out;
 }
 
@@ -756,5 +783,5 @@ export function drawEffect(g, c, f) {
 
 /** Text Claude and the window use to describe the catalogue. */
 export function describeEffects() {
-  return Object.entries(EFFECTS).map(([id, fx]) => `• ${id} — ${fx.label}${fx.say ? ` (cue words: ${fx.say.map((w) => `"${w}"`).join(', ')})` : ''}${fx.needs === 'cutout' ? ` [needs a cutout of the footage under it: frame_cutout${fx.params.plate ? '; and a plate' : ''}]` : fx.uses === 'cutout' ? ' [uses a cutout when the footage has one]' : ''}. ${fx.about}\n    settings: ${Object.entries(fx.params).map(([k, s]) => `${k} (${s.kind === 'number' ? `${s.min}–${s.max}, default ${s.default}` : s.kind === 'choice' ? `${s.options.join('|')}, default ${s.default}` : s.kind === 'asset' ? 'asset id' : `${s.kind}, default "${s.default}"`}): ${s.about}`).join('; ')}`).join('\n');
+  return Object.entries(EFFECTS).filter(([, fx]) => !fx.hidden).map(([id, fx]) => `• ${id} — ${fx.label}${fx.say ? ` (cue words: ${fx.say.map((w) => `"${w}"`).join(', ')})` : ''}${fx.needs === 'cutout' ? ` [needs a cutout of the footage under it: frame_cutout${fx.params.plate ? '; and a plate' : ''}]` : fx.uses === 'cutout' ? ' [uses a cutout when the footage has one]' : ''}. ${fx.about}\n    settings: ${Object.entries(fx.params).map(([k, s]) => `${k} (${s.kind === 'number' ? `${s.min}–${s.max}, default ${s.default}` : s.kind === 'choice' ? `${s.options.join('|')}, default ${s.default}` : s.kind === 'asset' ? 'asset id' : `${s.kind}, default "${s.default}"`}): ${s.about}`).join('; ')}`).join('\n');
 }

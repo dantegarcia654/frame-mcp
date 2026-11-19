@@ -18,7 +18,7 @@ try {
     const plate = fr.plate ? (plates[fr.plate] ||= await load(fr.plate)) : null;
     const cv = make(spec.W, spec.H), g = cv.getContext('2d');
     // matteAlpha: these cutout frames carry the person in their alpha channel (src/effects.js writes them that way).
-    drawEffect(g, fr.clip, { W: spec.W, H: spec.H, t: fr.t, d: fr.d, base, matte, matteAlpha: true, plate, face: fr.face, person: fr.person, unit: 1, make });
+    drawEffect(g, spec.clips ? spec.clips[fr.clip] : fr.clip, { W: spec.W, H: spec.H, t: fr.t, d: fr.d, base, matte, matteAlpha: true, plate, face: fr.face, person: fr.person, unit: 1, make });
     base?.close?.(); matte?.close?.();
     const blob = await new Promise((r) => cv.toBlob(r, fr.ext === 'jpg' ? 'image/jpeg' : 'image/png', 0.95));
     await pending; // one upload in flight while the next frame draws
