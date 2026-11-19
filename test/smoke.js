@@ -342,6 +342,37 @@ try {
       && saved.revisions.at(-1)?.id === result.revision_id && saved.revisions.at(-1)?.components.length === 1
       && saved.clips[0].effect.params.nodes[0].text === 'Take two');
   }
+  {
+    const start = await call('frame_start', { name: 'Live reframe', aspect: '540x960' });
+    const project_id = start.text.match(/\((p_\w+)\)/)[1];
+    await call('frame_import', { project_id, paths: [clip], prepare: false, decide: false });
+    await call('frame_edit', { project_id, fast: true, ops: [
+      { op: 'add_clip', asset: 'a1', in: 1, out: 3, fit: 'contain', move: [{ t: 0, x: .1 }] },
+    ] });
+    const [before] = projOf(project_id).clips;
+    const args = { project_id, clip_id: before.id, zoom: 1.5, focus: { x: 1, y: 0 } };
+    const bad = await call('frame_reframe', { ...args, zoom: 0 });
+    const badClip = await call('frame_reframe', { ...args, clip_id: 'not-a-clip' });
+    ok('reframe validates target and zoom before editing', bad.isError && badClip.isError
+      && JSON.stringify(projOf(project_id).clips[0]) === JSON.stringify(before));
+    const reply = await call('frame_reframe', args);
+    const result = JSON.parse(reply.content[0].text);
+    const saved = projOf(project_id);
+    const { move, ...original } = before;
+    const expected = { ...original, fit: 'cover', scale: 1.5, x: result.x, y: result.y };
+    const unchanged = await call('frame_reframe', args);
+    ok('reframe clamps an edge focus and saves one visual-only revision', result.status === 'applied'
+      && result.x < 0 && result.y > 0 && result.y < .25
+      && JSON.stringify(saved.clips[0]) === JSON.stringify(expected)
+      && saved.revisions.at(-1)?.id === result.revision_id
+      && JSON.parse(unchanged.content[0].text).status === 'unchanged'
+      && projOf(project_id).revisions.length === saved.revisions.length);
+    await call('frame_revisions', { project_id, action: 'revert', revision_id: result.revision_id });
+    const [restored] = projOf(project_id).clips;
+    ok('reframe can restore the previous fit and motion in Review', restored.fit === before.fit
+      && restored.scale === before.scale && restored.x === before.x && restored.y === before.y
+      && JSON.stringify(restored.move) === JSON.stringify(move));
+  }
 } finally {
   decideMock.close();
   daemon.kill(); fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); // the daemon may still be finishing a write

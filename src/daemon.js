@@ -171,6 +171,12 @@ function snapshot(p) {
   if (h.undo.length > 100) h.undo.shift();
   h.redo = [];
 }
+function stageClipRevision(p, clip, op, method) {
+  const next = { ...p, clips: p.clips.map(c => c === clip ? structuredClone(c) : c),
+    revisions: [...(p.revisions || [])], feed: [...p.feed] };
+  const { revision } = applyRevision(next, op, {}, { type: 'agent', name: 'Tool caller', method });
+  return { next, revision };
+}
 function timeTravel(p, dir) {
   const h = history.get(p.id); const from = dir === 'undo' ? h?.undo : h?.redo, to = dir === 'undo' ? h?.redo : h?.undo;
   if (!from?.length) return false;
@@ -744,20 +750,66 @@ const handlers = {
       }
       const op = { op: 'patch_graphic', id: clip.id, node_id: node.id, patch };
       // Stage the one changed clip so a failed disk write leaves playback and undo history intact.
-      const next = { ...p, clips: p.clips.map(c => c === clip ? structuredClone(c) : c),
-        revisions: [...(p.revisions || [])], feed: [...p.feed] };
-      const result = applyRevision(next, op, {}, { type: 'agent', name: 'Tool caller', method: 'FRAME title tool' });
+      const { next, revision } = stageClipRevision(p, clip, op, 'FRAME title tool');
       const entry = activity('applied', `Applied and saved “${clip.label}” · ${changed.join(', ')}`, {
-        revisionId: result.revision.id, clipIds: [clip.id],
+        revisionId: revision.id, clipIds: [clip.id],
       }, next);
-      emitClipChanges(next, new Set([clip.id]), [entry], [result.revision], [], { strict: true });
+      emitClipChanges(next, new Set([clip.id]), [entry], [revision], [], { strict: true });
       snapshot(p);
       Object.assign(p, next);
       return [text(JSON.stringify({ execution_id: executionId, status: 'applied', project_id: p.id,
-        revision_id: result.revision.id, changed, started_at: startedAt, applied_at: entry.ts }))];
+        revision_id: revision.id, changed, started_at: startedAt, applied_at: entry.ts }))];
     } catch (e) {
       const entry = activity('failed', `Title revision failed · ${e.message}`);
       emitClipChanges(p, new Set(), [entry], []);
+      throw e;
+    }
+  },
+  async frame_reframe(a) {
+    if (!a.project_id || a.project_id !== currentId) throw new Error('Open the requested project in the Frame window before reframing.');
+    const p = current(a.project_id), executionId = uid('tool_'), startedAt = Date.now();
+    const activity = (target, phase, message, extra) => feed(target, {
+      actor: 'frame', kind: 'op', op: 'frame_reframe', executionId, phase, text: message, ...extra,
+    });
+    sendProjectDelta(p, { feedEntries: [activity(p, 'started', 'Reframe started')] });
+    try {
+      if (p.paused) throw new Error('Frame editing is paused. Resume editing in the Frame window.');
+      const clip = p.clips.find(c => c.id === a.clip_id);
+      if (!clip || !['video', 'image'].includes(clip.kind)) throw new Error('Give the clip ID of a video or still in the active timeline.');
+      const asset = p.assets[clip.asset];
+      if (![asset?.width, asset?.height, p.width, p.height].every(n => Number.isFinite(n) && n > 0)) {
+        throw new Error('Reframe needs a source and project with valid picture dimensions.');
+      }
+      const { width, height } = asset;
+      const { zoom, focus } = a;
+      if (!Number.isFinite(zoom) || zoom < 1 || zoom > 3 ||
+          ![focus?.x, focus?.y].every(v => Number.isFinite(v) && v >= 0 && v <= 1)) {
+        throw new Error('Supply zoom from 1 to 3 and source focus x/y from 0 to 1.');
+      }
+      const cover = Math.max(p.width / width, p.height / height);
+      // Reserve a tiny edge margin where possible for FFmpeg's even-size/overlay rounding.
+      const placement = (point, sourceSize, frameSize) => {
+        const ratio = sourceSize * cover * zoom / frameSize;
+        const room = Math.max(0, (ratio - 1) / 2 - 2 / frameSize);
+        return Math.max(-room, Math.min(room, (0.5 - point) * ratio));
+      };
+      const x = placement(focus.x, width, p.width), y = placement(focus.y, height, p.height);
+      const op = { op: 'update_clip', id: clip.id, fit: 'cover', scale: zoom, x, y, move: null, ripple: false };
+      const { next, revision } = stageClipRevision(p, clip, op, 'FRAME reframe tool');
+      const label = clip.label || asset.name || clip.id;
+      const phase = revision ? 'applied' : 'unchanged';
+      const entry = activity(next, phase, `${label} · ${zoom}× cover crop${revision ? ' saved' : ' already set'}`, {
+        revisionId: revision?.id, clipIds: [clip.id],
+      });
+      emitClipChanges(next, new Set(revision ? [clip.id] : []), [entry], revision ? [revision] : [], [], { strict: true });
+      if (revision) snapshot(p);
+      Object.assign(p, next);
+      return [text(JSON.stringify({ execution_id: executionId, status: phase, project_id: p.id,
+        clip_id: clip.id, revision_id: revision?.id, scale: zoom, x, y,
+        started_at: startedAt, applied_at: entry.ts }))];
+    } catch (e) {
+      const entry = activity(p, 'failed', `Reframe failed · ${e.message}`);
+      sendProjectDelta(p, { feedEntries: [entry] });
       throw e;
     }
   },
