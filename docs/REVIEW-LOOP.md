@@ -8,7 +8,7 @@ The developer owns architecture, tools, implementation sequence, and development
 
 Use a pull request in `dantegarcia654/frame-mcp` for each reviewable change. Code, evidence, feedback, defense, and decision belong on that PR. [Issue #14](https://github.com/dantegarcia654/frame-mcp/issues/14) is the entry point and review queue.
 
-ChatGPT can retrieve repository changes and discussions when asked. This setup is on demand: a push, upload, or comment does not automatically wake ChatGPT. Dante can say **"review FRAME uploads"**, **"review FRAME PR #N"**, or **"read Claude's response on PR #N and make the final call."** Telegram is optional and is not required for this loop.
+GitHub event-triggered automation **FRAME PR review alerts** is enabled for this repository as of November 19, 2026. It handles PR opening/ready events, commit updates, reviews, and comments. It notifies Dante in ChatGPT and reviews ready submissions, posts feedback/questions, and considers developer responses. Drafts get an alert/brief until ready. No hourly polling schedule is used. Delivery latency and a full round trip have not yet been verified. Manual prompts remain available: **"review FRAME uploads"**, **"review FRAME PR #N"**, or **"read Claude's response on PR #N and make the final call."** Telegram is optional.
 
 ## Submit enough context, in any useful format
 
@@ -65,4 +65,4 @@ Bind every final decision to the reviewed commit. Later code changes require rea
 
 ## Current setup boundary
 
-Repository reading and issue writing are connected. Review rules and a PR template are committed with this setup. Automatic watchers, background model-to-model debate, upload-triggered reviews, and enforced GitHub merge gates are not installed. Only call those active after an end-to-end test demonstrates them.
+Repository reading, issue writing, review rules, and a PR template are connected. The GitHub event automation is created and enabled; its first event delivery and end-to-end review remain unverified. Automation-authored feedback begins with `[FRAME REVIEW AUTOMATION]`; ignore those events to avoid self-reply loops and deduplicate by event/head/phase. This is not a guaranteed instant-delivery service. GitHub comments do not by themselves wake the developer's Claude session; that side still needs a working trigger or a human opening the comments. Enforced GitHub merge gates are not installed, and review decisions do not merge or deploy.
