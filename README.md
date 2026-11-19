@@ -27,6 +27,22 @@ Frame is an MCP server. It does not add a new AI or a new kind of video; it give
 - **Camera Move (v1.1, prototype)** — `frame_camera_move` turns a still into a push-in, pull-out, orbit, parallax or dolly-zoom clip using a local depth model (Depth-Anything-V2-Small). It is a 2.5D parallax move, not a true 3D world. Needs python3 with `torch transformers opencv-python pillow`.
 - **Effect clips and the person cutout (1.4)** — eleven effects Frame draws itself: clone row, text behind the person, text orbiting the head, rack focus, code body, letter window, tracking box, impact frame, comment drop, blow away (needs a shot of the empty set) and agent swarm. `frame_cutout` separates the person from the background on every frame on your computer (Apple Vision on macOS, rembg elsewhere), and starts by itself at import. Each effect is a clip you can see, change, move and undo; the preview, `frame_view` and the render run the same drawing code.
 - **Effects from what you say (1.4)** — `add_effects_at_words` places each effect on the word where the speaker names it ("…clone row…"), from the transcript. `add_agent_swarm` draws the agents that made the edit over the video, each replaying its own logged steps (the word it heard, the clip it placed, the cutout it read); nothing in that overlay is made up.
+- **The decision sheet (1.5, optional, uploads to Google)**: Frame labels each imported clip using Google's Gemini Decisions API (`gemini-decision-1`).
+  - **What each label has:** a story role, a hook score, steadiness, and a camera-junk flag. Each comes with the model's confidence.
+  - **What the agent does with it:** reads the sheet instead of looking at every clip, and only looks at the clips marked REVIEW.
+  - **Measured on the author's own footage**, sketch-to-demo pack:
+    - The role matched how each clip was used in two approved cuts 84–91% of the time.
+    - Answers at 70% confidence or more were right 96% of the time.
+    - 14 clips were labeled 1.4 s after the last one imported.
+  - **`frame_decide`** asks your own yes/no, choice and score questions across many clips at once, in about a second per clip.
+  - These are model guesses, and Frame always labels them that way.
+  - Off unless a Gemini API key is present. See [Decision sheet](#decision-sheet-optional).
+- **The swarm, then the Director (1.5, needs the decision sheet)**: `frame_swarm` builds a story cut from a template, live on the timeline, as a set of named agents:
+  - **Caster** lays a rough cut from the decision sheet at once.
+  - **Scouts** ask about every 2-second window of the candidate clips, in parallel.
+  - **Trimmer** swaps in the best window for each slot as soon as its answers land.
+  - **On the author's 14-clip shoot:** the rough cut was on the timeline in 1.1 s and every slot was trimmed by about 6 s.
+  - **The Director:** the swarm knows what a shot shows, not which moment is best, so the calling agent then directs it. It reads 1-frame-per-second filmstrips and re-picks each shot with your style profile in hand. On the same shoot, that pass raised the shots on the same clip as the editor's approved cut from 6/13 to 9/13.
 - **Black and white.**
 
 ## Requirements
@@ -85,7 +101,9 @@ Projects live in `~/.frame`. Renders go to `~/Movies/Frame` (`~/Videos/Frame` on
 | Tool | What it does |
 | --- | --- |
 | `frame_start` | Opens the window and a project. Always the first call. Returns your style profile (`~/.frame/profiles/default.md`) if you have one. |
-| `frame_import` | Adds video, audio or images; measures loudness and silences. |
+| `frame_import` | Adds video, audio or images; measures loudness and silences. With a Gemini key, also labels each video clip on the decision sheet. |
+| `frame_decide` | Asks Gemini Decisions typed questions (yes/no, choice, score) about many clips in parallel. Answers are guesses with probabilities. |
+| `frame_swarm` | Builds a templated story cut in seconds (Caster, Scouts, Trimmer), then hands it to the calling agent to direct: `strips` shows the clips at 1 fps, `direct` applies the picks live. |
 | `frame_transcribe` | Word-level transcript (local Whisper), or accepts supplied words. |
 | `frame_note` | Shows Claude's thinking and decisions in the feed. |
 | `frame_cut_silence` | One-call dead-air removal. Adaptive to each clip's own noise floor, `natural`/`tight`/`aggressive` styles, `dry_run` preview. |
@@ -99,6 +117,54 @@ Projects live in `~/.frame`. Renders go to `~/Movies/Frame` (`~/Videos/Frame` on
 | `frame_wait` | Waits for you when Claude asked a question or was paused. |
 | `frame_history` | Undo / redo. |
 | `frame_render` | Renders H.264/AAC MP4 through ffmpeg; reports measured size, duration and loudness. |
+
+## Decision sheet (optional)
+
+Frame can label each video clip when you import it. It sends a small copy of the clip (360 px, 2 frames a second, mono 16 kHz audio) to Google's [Gemini Decisions API](https://blog.google/innovation-and-ai/technology/developers-tools/gemini-decisions-api/) and stores the typed answers on the clip.
+
+- **What you get:**
+  - The window shows a badge per clip, such as `95% drawing`.
+  - An unsure clip gets a white `64% open tool?` pill.
+  - `frame_state` lists the sheet for the agent.
+- **Turn it on:** create an API key in Google AI Studio on a project with billing turned on.
+  - Use the paid tier. On the free tier, Google may use what you upload to improve its products.
+  - Then either `export GEMINI_API_KEY=...`, or save the key on one line in `~/.frame/gemini.key`.
+  - `frame doctor` shows whether it is on.
+- **Turn it off:** `FRAME_DECISIONS=off` turns it off everywhere. `frame_import {decide: false}` skips one import.
+- **Packs:**
+  - `general` (default) asks what kind of footage each clip is: talking head, screen recording, hands, b-roll, reaction, graphic or junk. It has not been scored against real edits yet.
+  - `sketch-to-demo` asks which of 14 story steps a clip shows, and has been scored. Choose it with `frame_import {decide_pack: "sketch-to-demo"}`.
+- **Cost:** about $0.10 per million input tokens, and a minute of footage is roughly 6–20K tokens. Clips over 10 minutes are not labeled at import; ask about a range with `frame_decide {from, to}`.
+- **What it is bad at, measured:**
+  - Exact wording from audio: chance level.
+  - Finding the moment inside a clip: 35% top-1.
+  - Small on-screen detail, such as which file is attached in an upload dialog: wrong at every resolution tried.
+  - It can also be wrong when it is sure. In testing, it said a face covered by a hand was "not clearly visible" with 71% confidence.
+  - Check what matters with `frame_view`.
+
+### The swarm and the Director
+
+`frame_swarm` fills a story template on V1 with agents you can watch. Each agent is a named cursor in the window, and every change it makes has its reason in the feed.
+
+1. **Caster** places the best-labeled clip in each slot. This is a rule over the decision sheet.
+2. **Scouts** cut each slot's top 3 candidate clips into 2-second windows and ask the model, for every window at once, whether it shows the slot's moment and whether it is camera junk.
+3. **Trimmer** puts each slot's best-rated window in place as soon as that slot's answers are in. Reusing a clip halves a window's score, which keeps angles apart.
+4. **The Director is the agent that called the tool.**
+   - The result lists every slot, its current shot and its candidates, followed by the Director brief: the rules plus your style profile.
+   - `frame_swarm {action: "strips"}` returns a filmstrip of each candidate clip, one frame per second.
+   - `frame_swarm {action: "direct", picks: [{slot, asset, start, why}]}` re-picks shots live.
+
+Measured on one 14-clip shoot (241 s of footage), against the editor's approved cut:
+
+| | Swarm alone | Swarm plus Director |
+| --- | --- | --- |
+| Time | rough cut 1.1 s, all trimmed by about 6 s | plus the Director's look, about 3 minutes |
+| Same clip as the editor | 6 / 13 | 9 / 13 |
+| Same moment as the editor | 1 / 13 | 3 / 13 |
+
+- **Templates:** `sketch-to-demo` is built in, with 13 slots: reaction hook, payoff first, how it was made, the result, demo. Or pass `slots: [{id, role, seconds, about}]` with roles from the decision pack.
+- **Cost:** about one cent of Gemini usage per run on that shoot (212 requests).
+- **The swarm does not do** music, captions or words. It places muted picture to a template's slot lengths.
 
 ## Honest limits (v1.0)
 

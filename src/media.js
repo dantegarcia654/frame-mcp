@@ -2,7 +2,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { run, round, mkdirp } from './util.js';
+import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { run, round, mkdirp, HOME } from './util.js';
 
 const VIDEO_EXT = /\.(mp4|mov|m4v|mkv|webm|avi|mts|mxf)$/i;
 const AUDIO_EXT = /\.(mp3|wav|m4a|aac|flac|ogg|aif|aiff|opus)$/i;
@@ -133,20 +135,121 @@ export async function whisperAvailable() {
   return null;
 }
 
-export async function transcribe(file, { model = 'base.en', language } = {}, onLog) {
-  const cmd = await whisperAvailable();
-  if (!cmd) return null;
-  const dir = mkdirp(fs.mkdtempSync(path.join(os.tmpdir(), 'frame-whisper-')));
+// ── Transcription engines ─────────────────────────────────────────────────────────────────────────
+// 1. macOS 26+: Apple's on-device SpeechAnalyzer (src/apple-speech.swift, compiled once into HOME/bin).
+//    Measured on an M3 Pro: 8.7 min of talking head in 4.9 s with 4 parallel analyzers (Whisper base.en: ~140 s).
+// 2. Anywhere else (Windows, Linux, older macOS) or when asked: Whisper, split into time ranges that run in
+//    parallel across the CPU cores. Ranges overlap by 1.5 s and each keeps only the words centred inside it.
+// Both run on this machine; nothing is uploaded. Names an engine mishears are fixed from HOME/spellings.json.
+
+const APPLE_SRC = fileURLToPath(new URL('./apple-speech.swift', import.meta.url));
+let appleBin = null;
+/** Path to the compiled Apple speech tool, or null when this machine can't run it (not macOS 26+, no swiftc, or FRAME_NO_APPLE_SPEECH). Compiles once per source version (~50 s). */
+export function appleSpeechBinary() {
+  if (appleBin) return appleBin;
+  appleBin = (async () => {
+    // Darwin 25 is macOS 26, the first release with SpeechAnalyzer.
+    if (process.platform !== 'darwin' || Number(os.release().split('.')[0]) < 25 || process.env.FRAME_NO_APPLE_SPEECH) return null;
+    const hash = crypto.createHash('sha1').update(fs.readFileSync(APPLE_SRC)).digest('hex').slice(0, 10);
+    const bin = path.join(HOME, 'bin', `apple-speech-${hash}`);
+    if (fs.existsSync(bin)) return bin;
+    mkdirp(path.dirname(bin));
+    const tmp = `${bin}.${process.pid}.tmp`;
+    try {
+      const r = await run('swiftc', ['-O', '-parse-as-library', APPLE_SRC, '-o', tmp], { strict: false, timeout: 10 * 60000 });
+      if (r.code !== 0 || !fs.existsSync(tmp)) return null;
+      fs.renameSync(tmp, bin);
+      return bin;
+    } catch { return null; }
+  })();
+  return appleBin;
+}
+
+/** Which engine frame_transcribe will use here, or null if none: { id: 'apple' | 'whisper', label }. */
+export async function transcriber() {
+  if (await appleSpeechBinary()) return { id: 'apple', label: 'Apple on-device speech (macOS)' };
+  if (await whisperAvailable()) return { id: 'whisper', label: `Whisper, ${Math.max(1, Math.floor(os.cpus().length / 2))} parallel ranges on long clips` };
+  return null;
+}
+
+/** Spelling fixes for names an engine mishears, e.g. {"clawed": "Claude"}, from HOME/spellings.json (single words, case-insensitive). */
+export function spellings() {
+  try { const j = JSON.parse(fs.readFileSync(path.join(HOME, 'spellings.json'), 'utf8')); return j && typeof j === 'object' ? j : {}; } catch { return {}; }
+}
+function applySpellings(words, map) {
+  const lower = new Map(Object.entries(map).map(([k, v]) => [k.toLowerCase(), String(v)]));
+  if (!lower.size) return 0;
+  let fixed = 0;
+  for (const w of words) {
+    const m = w.text.match(/^([^\p{L}\p{N}]*)([\p{L}\p{N}'’-]+)([^\p{L}\p{N}]*)$/u);
+    const rep = m && lower.get(m[2].toLowerCase());
+    if (rep && rep !== m[2]) { w.text = m[1] + rep + m[3]; fixed++; }
+  }
+  return fixed;
+}
+
+async function appleTranscribe(bin, wav, { language, vocabulary, duration }) {
+  const chunks = Math.max(1, Math.min(8, Math.round(duration / 60)));
+  const r = await run(bin, [wav, language || 'en-US', String(chunks), vocabulary.join(',')], { strict: false, timeout: 15 * 60000 });
+  if (r.code !== 0) throw new Error(r.stderr.trim().split('\n').pop() || `apple-speech exited ${r.code}`);
+  const j = JSON.parse(r.stdout);
+  const words = j.words.map((w) => ({ text: w.text, start: round(w.start, 2), end: round(w.end, 2) }));
+  return { words, engine: `Apple on-device speech ${j.engine.split(' ')[1] || ''}${chunks > 1 ? `, ${chunks} parallel` : ''}`.trim() };
+}
+
+async function whisperTranscribe(cmd, wav, dir, { model, language, duration }, onLog) {
+  const cpus = os.cpus().length;
+  const par = duration > 90 ? Math.max(1, Math.min(8, Math.floor(cpus / 2), Math.ceil(duration / 60))) : 1;
+  const step = duration / par, threads = String(Math.max(1, Math.floor(cpus / par)));
+  const parts = await Promise.all(Array.from({ length: par }, async (_, i) => {
+    const from = i * step, to = i === par - 1 ? duration + 1 : (i + 1) * step;
+    const lo = par === 1 ? 0 : Math.max(0, from - 1.5), hi = Math.min(duration, to + 1.5);
+    const part = par === 1 ? wav : path.join(dir, `part${i}.wav`);
+    if (par > 1) await run('ffmpeg', ['-v', 'error', '-y', '-ss', String(lo), '-t', String(hi - lo), '-i', wav, '-c', 'copy', part]);
+    const out = mkdirp(path.join(dir, `out${i}`));
+    const args = [...cmd.slice(1), part, '--model', model, '--word_timestamps', 'True', '--output_format', 'json', '--output_dir', out, '--fp16', 'False', '--threads', threads];
+    if (language) args.push('--language', language);
+    await run(cmd[0], args, { onStderr: onLog, timeout: 30 * 60000 });
+    const j = JSON.parse(fs.readFileSync(path.join(out, `${path.basename(part, '.wav')}.json`), 'utf8'));
+    const words = [];
+    for (const seg of j.segments || []) for (const w of seg.words || []) {
+      const s = w.start + lo, e = w.end + lo, mid = (s + e) / 2;
+      if (par === 1 || (mid >= from && mid < to)) words.push({ text: w.word.trim(), start: round(s, 2), end: round(e, 2) });
+    }
+    return words;
+  }));
+  return { words: parts.flat().sort((a, b) => a.start - b.start), engine: `whisper ${model}${par > 1 ? `, ${par} parallel` : ''}` };
+}
+
+/**
+ * Word-level transcript on this machine. engine "auto" (default) uses Apple on-device speech when it can,
+ * else Whisper; passing a Whisper model or engine "whisper" forces Whisper. Returns null if no engine exists.
+ */
+export async function transcribe(file, { model, language, engine = 'auto', vocabulary, duration = 0 } = {}, onLog) {
+  const t0 = Date.now();
+  const forceWhisper = engine === 'whisper' || (engine === 'auto' && !!model);
+  const apple = forceWhisper ? null : await appleSpeechBinary();
+  if (engine === 'apple' && !apple) throw new Error('Apple on-device speech needs macOS 26 or later and the Xcode command line tools (swiftc).');
+  const wcmd = apple ? null : await whisperAvailable();
+  if (!apple && !wcmd) return null;
+  const dir = mkdirp(fs.mkdtempSync(path.join(os.tmpdir(), 'frame-speech-')));
   const wav = path.join(dir, 'audio.wav');
-  await run('ffmpeg', ['-v', 'error', '-y', '-i', file, '-vn', '-ac', '1', '-ar', '16000', wav]);
-  const args = [...cmd.slice(1), wav, '--model', model, '--word_timestamps', 'True', '--output_format', 'json', '--output_dir', dir, '--fp16', 'False'];
-  if (language) args.push('--language', language);
-  await run(cmd[0], args, { onStderr: onLog, timeout: 30 * 60000 });
-  const j = JSON.parse(fs.readFileSync(path.join(dir, 'audio.json'), 'utf8'));
-  const words = [];
-  for (const seg of j.segments || []) for (const w of seg.words || []) words.push({ text: w.word.trim(), start: round(w.start, 2), end: round(w.end, 2) });
-  fs.rmSync(dir, { recursive: true, force: true });
-  return { words, text: (j.text || '').trim(), engine: `whisper ${model}` };
+  const map = spellings(), vocab = vocabulary || [...new Set(Object.values(map).map(String))];
+  let tr, note = '';
+  try {
+    await run('ffmpeg', ['-v', 'error', '-y', '-i', file, '-vn', '-ac', '1', '-ar', '16000', wav]);
+    if (!duration) duration = (await probe(wav)).duration || 0;
+    if (apple) {
+      try { tr = await appleTranscribe(apple, wav, { language, vocabulary: vocab, duration }); }
+      catch (e) {
+        const c = await whisperAvailable(); if (!c) throw e;
+        note = `Apple on-device speech failed (${String(e.message).slice(0, 160)}), so Whisper ran instead`;
+        tr = await whisperTranscribe(c, wav, dir, { model: model || 'base.en', language, duration }, onLog);
+      }
+    } else tr = await whisperTranscribe(wcmd, wav, dir, { model: model || 'base.en', language, duration }, onLog);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  const spelled = applySpellings(tr.words, map);
+  return { words: tr.words, text: tr.words.map((w) => w.text).join(' '), engine: tr.engine, seconds: round((Date.now() - t0) / 1000, 1), spelled, note };
 }
 
 export function kindFromExt(file) { return VIDEO_EXT.test(file) ? 'video' : AUDIO_EXT.test(file) ? 'audio' : IMAGE_EXT.test(file) ? 'image' : null; }

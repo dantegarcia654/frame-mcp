@@ -22,9 +22,31 @@ const sha = (x) => crypto.createHash('sha1').update(typeof x === 'string' ? x : 
 let code = { mtime: -1, hash: '' };
 /** Hash of ui/effects.js as it is on disk now: changing how an effect draws invalidates every frame drawn by the old code. */
 function effectCode() {
-  const m = fs.statSync(EFFECTS_JS).mtimeMs;
-  if (m !== code.mtime) code = { mtime: m, hash: sha(fs.readFileSync(EFFECTS_JS, 'utf8')) };
+  const m = Math.max(fs.statSync(EFFECTS_JS).mtimeMs, fs.statSync(path.join(path.dirname(EFFECTS_JS), 'live-graphics.js')).mtimeMs);
+  if (m !== code.mtime) code = { mtime: m, hash: sha(fs.readFileSync(EFFECTS_JS, 'utf8') + fs.readFileSync(path.join(path.dirname(EFFECTS_JS), 'live-graphics.js'), 'utf8') + fs.readFileSync(path.join(path.dirname(EFFECTS_JS), 'official-brand-assets.js'), 'utf8')) };
   return code.hash;
+}
+
+/**
+ * Export view: every live graphic layer drawn into ONE full-frame overlay, so the cache holds one PNG per output frame
+ * instead of one per layer per frame (a fully live reel has hundreds of layers; per-layer frames ran to ~1 GB).
+ * Only used when every live layer sits above all footage, so the stacking order is exactly the timeline's.
+ * Returns a view of p (never saved): live clips replaced by one synthetic `live_stack` clip. The layers keep their own
+ * clip-local time, opacity and fades, and are drawn by the same drawNodes the window previews with.
+ */
+export function liveStack(p) {
+  const live = p.clips.filter((c) => c.effect?.type === 'live_graphic');
+  if (live.length < 2) return p;
+  const order = (t) => (t[0] === 'T' ? 1000 : 0) + Number(t.slice(1));
+  const lo = Math.min(...live.map((c) => order(c.track)));
+  if (p.clips.some((c) => c.kind !== 'audio' && c.kind !== 'text' && c.effect?.type !== 'live_graphic' && order(c.track) >= lo)) return p;
+  const sorted = [...live].sort((a, b) => order(a.track) - order(b.track) || a.start - b.start);
+  const total = Math.max(...p.clips.map(end));
+  const top = sorted.at(-1).track;
+  const layers = sorted.map((c) => ({ s: c.start, e: end(c), i: c.in || 0, o: c.opacity ?? 1, fi: c.fadeIn || 0, fo: c.fadeOut || 0, nodes: c.effect.params.nodes }));
+  p.fx ||= {};
+  const stack = { id: 'live_stack', kind: 'effect', track: top, start: 0, in: 0, out: total, speed: 1, effect: { type: 'live_stack', params: { layers } } };
+  return { ...p, clips: [...p.clips.filter((c) => c.effect?.type !== 'live_graphic'), stack] };
 }
 
 /** Footage clips on the effect's source track that overlap it. */
@@ -103,6 +125,7 @@ async function extractPlate(p, c, dir) {
 
 /** The picture (and cutout) under effect c for the frames in `indices`, written to dir as b_NNNNN.jpg / m_NNNNN.png. */
 async function extractInputs(p, c, indices, dir, matteFile) {
+  if (EFFECTS[c.effect.type].input === false) return null;
   const cut = readsMatte(p, c);
   const want = indices.filter((i) => !fs.existsSync(path.join(dir, `b_${fxFile(i, 'jpg')}`)) || (cut && !fs.existsSync(path.join(dir, `m_${fxFile(i, 'png')}`))));
   const plate = c.effect.params?.plate ? extractPlate(p, c, dir) : null;
@@ -188,7 +211,7 @@ async function drawOne(chrome, spec, files, out, onFrame) {
     const missing = Object.entries(out).filter(([, f]) => !fs.existsSync(f));
     if (missing.length) throw new Error(`${missing.length} effect frames were not drawn`);
   } finally {
-    try { proc?.kill('SIGKILL'); } catch {}
+    try { proc?.kill(process.env.FRAME_AGENT_CDP ? 'SIGTERM' : 'SIGKILL'); } catch {}
     setTimeout(() => fs.rm(profile, { recursive: true, force: true }, () => {}), 1500);
   }
 }
@@ -211,7 +234,7 @@ async function drawInChrome(spec, files, out, onFrame, workers) {
  * Returns { drawn: { clipId: {dir, ext} }, problems: [text] } — an effect with a problem is left out, never drawn wrong.
  */
 export async function ensureEffects(p, want, ctx) {
-  const drawn = {}, problems = [], frames = [], files = {}, out = {}, work = [];
+  const drawn = {}, problems = [], frames = [], files = {}, out = {}, work = [], clips = {};
   const t0 = Date.now();
   p.fx ||= {};
   for (const { clip: c, indices } of want) {
@@ -245,16 +268,17 @@ export async function ensureEffects(p, want, ctx) {
         face = mapBox(tr.face, r); person = mapBox(tr.person, r);
       }
       const key = `${c.id}_${i}`, { t, d } = effectTime(c, c.start + i / p.fps);
-      files[`b${key}`] = path.join(srcDir, `b_${fxFile(i, 'jpg')}`);
+      if (EFFECTS[c.effect.type].input !== false) files[`b${key}`] = path.join(srcDir, `b_${fxFile(i, 'jpg')}`);
       if (readsMatte(p, c)) files[`m${key}`] = path.join(srcDir, `m_${fxFile(i, 'png')}`);
       out[key] = path.join(dir, fxFile(i, ext));
-      frames.push({ key, clip: { id: c.id, effect: c.effect, in: c.in, out: c.out, start: c.start }, t: round(t, 5), d, ext, base: `b${key}`, matte: readsMatte(p, c) ? `m${key}` : null, plate: plate ? `pl${c.id}` : null, face, person });
+      clips[c.id] ||= { id: c.id, effect: c.effect, in: c.in, out: c.out, start: c.start };
+      frames.push({ key, clip: c.id, t: round(t, 5), d, ext, base: EFFECTS[c.effect.type].input === false ? null : `b${key}`, matte: readsMatte(p, c) ? `m${key}` : null, plate: plate ? `pl${c.id}` : null, face, person });
     }
   }
   let workers = 0;
   if (frames.length) {
-    try { workers = await drawInChrome({ W: p.width, H: p.height, frames }, files, out, ctx.onProgress, ctx.workers); }
-    catch (e) { for (const id of new Set(frames.map((f) => f.clip.id))) { delete drawn[id]; problems.push(`${EFFECTS[p.clips.find((x) => x.id === id)?.effect.type]?.label || id} (${id}) was left out: ${e.message}`); } }
+    try { workers = await drawInChrome({ W: p.width, H: p.height, clips, frames }, files, out, ctx.onProgress, ctx.workers); }
+    catch (e) { for (const id of new Set(frames.map((f) => f.clip))) { delete drawn[id]; problems.push(`${EFFECTS[p.clips.find((x) => x.id === id)?.effect.type]?.label || id} (${id}) was left out: ${e.message}`); } }
   }
   // Remove cached frames of effects that are no longer on the timeline.
   for (const id of Object.keys(p.fx)) if (!p.clips.some((x) => x.id === id)) { for (const d of [p.fx[id].dir, p.fx[id].srcDir]) if (d) fs.rm(d, { recursive: true, force: true }, () => {}); delete p.fx[id]; }

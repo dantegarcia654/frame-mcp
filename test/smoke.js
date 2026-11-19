@@ -4,11 +4,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import http from 'node:http';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'frame-test-'));
 const env = { ...process.env, FRAME_PORT: '4791', FRAME_HOME: path.join(tmp, 'home'), FRAME_NO_OPEN: '1', FRAME_PACE: '0',
-  FRAME_PROFILES: path.join(tmp, 'profiles'), FRAME_APPROVED_DIR: path.join(tmp, 'approved'), FRAME_INBOX_DIR: path.join(tmp, 'inbox'), FRAME_INBOX_URL: 'http://127.0.0.1:4797' };
+  FRAME_PROFILES: path.join(tmp, 'profiles'), FRAME_APPROVED_DIR: path.join(tmp, 'approved'), FRAME_INBOX_DIR: path.join(tmp, 'inbox'), FRAME_INBOX_URL: 'http://127.0.0.1:4797',
+  // Decision sheet: always the local mock below, never Google, whatever key the developer has set.
+  GEMINI_API_KEY: 'smoke', FRAME_DECISIONS: '', FRAME_DECISIONS_ENDPOINT: 'http://127.0.0.1:4794/v1beta/decisions' };
 const base = 'http://127.0.0.1:4791';
 let failed = 0;
 const ok = (name, cond, extra = '') => { console.log(`${cond ? '✓' : '✗'} ${name}${extra ? ' — ' + extra : ''}`); if (!cond) failed++; };
@@ -18,6 +21,28 @@ spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=640x3
 
 const noisy = path.join(tmp, 'noisy.mp4'); // tone bursts over a constant noise bed (-34 dBFS) — a fixed -38 dB threshold sees no silence here
 spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=black:s=320x180:r=30:d=8', '-f', 'lavfi', '-i', "aevalsrc='0.4*sin(2*PI*300*t)*lt(mod(t,3),1.5)+0.02*(random(0)-0.5)*2':d=8", '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', noisy]);
+// A stand-in for the Gemini Decisions API: checks the request shape, answers deterministically. The first option of a
+// choice wins at 90% (55% for the sketch-to-demo pack, to exercise REVIEW); a question named force_402 gets HTTP 402.
+const decideSeen = [];
+const decideMock = http.createServer((req, res) => {
+  let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => {
+    let j = {}; try { j = JSON.parse(b); } catch {}
+    const v = j.input?.[0], q = j.questions || {};
+    const shapeOk = req.method === 'POST' && req.headers['x-goog-api-key'] === 'smoke' && j.model === 'gemini-decision-1' && v?.type === 'video' && v.mime_type === 'video/mp4' && (v.data?.length || 0) > 1000 && Object.keys(q).length > 0;
+    decideSeen.push({ shapeOk, keys: Object.keys(q) });
+    const send = (code, o) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
+    if (!shapeOk) return send(400, { error: { code: 400, message: 'request shape not accepted by the mock' } });
+    if (q.force_402) return send(402, { error: { code: 402, message: 'Your prepayment credits are depleted.' } });
+    const top = q.role?.criteria?.upload_drawing ? 0.55 : 0.9, answers = {};
+    for (const [k, x] of Object.entries(q)) {
+      if (x.type === 'noul') answers[k] = { type: 'noul', noul: 0.8, confidence: 0.8 };
+      else if (x.type === 'choice') { const o = Object.keys(x.criteria); answers[k] = { type: 'choice', choice: o[0], confidence: top, probabilities: Object.fromEntries(o.map((n, i) => [n, i ? (1 - top) / (o.length - 1) : top])) }; }
+      else answers[k] = { type: 'score', score: 1.5, confidence: 0.75 };
+    }
+    send(200, { answers, usage: { total_tokens: 321 } });
+  });
+});
+await new Promise((r) => decideMock.listen(4794, '127.0.0.1', r));
 const daemon = spawn(process.execPath, [path.join(root, 'bin/frame.js'), 'serve'], { env, stdio: 'ignore' });
 for (let i = 0; i < 40; i++) { try { await fetch(`${base}/api/ping`); break; } catch { await new Promise((r) => setTimeout(r, 100)); } }
 const call = async (name, args = {}) => { const r = await (await fetch(`${base}/api/call`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, arguments: args }) })).json(); return { ...r, text: r.content.map((c) => c.text || '').join('\n') }; };
@@ -27,6 +52,7 @@ try {
   ok('frame_start', /Frame is live/.test(r.text));
   r = await call('frame_import', { paths: [clip] });
   ok('frame_import measures silences', /silences/.test(r.text) && /a1 · video/.test(r.text), r.text.split('\n')[2]?.trim());
+  ok('import labels the clip on the decision sheet, as a guess', /Decision sheet — gemini-decision-1 guesses, NOT measurements/.test(r.text) && /a1 clip\.mp4: talking_head 90% · hook 1\.5\/2/.test(r.text), r.text.match(/a1 clip\.mp4: .*/)?.[0]);
   r = await call('frame_edit', { ops: [{ op: 'add_clip', asset: 'a1' }, { op: 'remove_silences', min_silence: 0.4 }, { op: 'add_clip', asset: 'a1', track: 'V2', start: 0.5, in: 1, out: 2, scale: 0.3, x: 0.3, y: -0.3, grade: { saturation: 0 }, fadeIn: 0.2 }, { op: 'update_clip', id: 'missing' }] });
   ok('frame_edit applies ops and reports bad ones', /1\. ✓/.test(r.text) && /2\. ✓ Cut \d+ pauses/.test(r.text) && /4\. ✗/.test(r.text));
   // The test clip ends in silence; cutting it must not leave a few frames of dead air behind as their own clip.
@@ -259,7 +285,40 @@ try {
       ok('import starts the person cutout in the background and frame_cutout waits for it', started && /Cut out the person in a1|a1 already has a cutout/.test(r.text), r.text.split('\n')[0].slice(0, 200));
     }
   }
+  // Decision sheet and frame_decide (against the mock above)
+  {
+    await call('frame_start', { name: 'decide', aspect: '9:16' });
+    r = await call('frame_import', { paths: [clip], decide_pack: 'sketch-to-demo' });
+    ok('an unsure role is marked REVIEW, with the runner-up', /a1 clip\.mp4: REVIEW, unsure: reaction_hook 55% or \w+ \d+%/.test(r.text), r.text.match(/a1 clip\.mp4: .*/)?.[0]);
+    r = await call('frame_state');
+    ok('frame_state carries the decision sheet', /Decision sheet/.test(r.text) && /pack "sketch-to-demo"/.test(r.text));
+    r = await call('frame_decide', { questions: { looks_at_lens: 'Does someone look at the lens?', shot: { type: 'choice', instructions: 'What shot is this?', criteria: ['Close-up', 'Wide shot'] } } });
+    ok('frame_decide answers yes/no and choice questions as guesses', /NOT measurements/.test(r.text) && /looks_at_lens: yes \(P\(yes\) 80%\)/.test(r.text) && /shot: close_up 90% · wide_shot 10%/.test(r.text), r.text.split('\n').slice(2, 4).join(' | '));
+    r = await call('frame_decide', { questions: { x: { type: 'maybe', instructions: 'Hmm?' } } });
+    ok('frame_decide rejects a malformed question with a usable message', r.isError && /type must be "yes_no", "choice" or "score"/.test(r.text), r.text.slice(0, 120));
+    r = await call('frame_decide', { from: 1, to: 3, questions: { force_402: 'Anything?' } });
+    ok('frame_decide says plainly when Google refuses (credits used up)', /failed: Google says the prepaid credits are used up/.test(r.text) && /source 1–3s/.test(r.text), r.text.match(/failed: .*/)?.[0]);
+    ok('every request the mock saw had the documented shape', decideSeen.length >= 4 && decideSeen.every((x) => x.shapeOk), `${decideSeen.length} requests`);
+  }
+  // The swarm: Caster + Scouts + Trimmer on a custom template, then strips and a Director pick (against the mock)
+  {
+    await call('frame_start', { name: 'swarm', aspect: '9:16' });
+    await call('frame_import', { paths: [clip, noisy] });
+    const slots = [{ id: 'one', role: 'talking_head', seconds: 1 }, { id: 'two', role: 'talking_head', seconds: 1.5 }];
+    r = await call('frame_swarm', { slots, pack: 'general' });
+    ok('frame_swarm builds and trims every slot, live, and hands over the Director brief', /Swarm built the "custom" cut/.test(r.text) && /2\/2 slots trimmed/.test(r.text) && /NOW YOU ARE THE DIRECTOR/.test(r.text), r.text.split('\n')[0].slice(0, 200));
+    r = await call('frame_state');
+    const v1 = (r.text.split('\nV1:\n')[1] || '').split(/\n[A-Z]/)[0];
+    ok('the swarm cut is on V1 with the template lengths', (v1.match(/· [\d.]+–[\d.]+s ·/g) || []).length === 2 && /0–2\.5s|2\.5s/.test(v1), v1.trim().split('\n').join(' | ').slice(0, 200));
+    r = await call('frame_swarm', { slots, pack: 'general' });
+    ok('frame_swarm will not overwrite V1 unless told to', r.isError && /replace: true/.test(r.text));
+    r = await call('frame_swarm', { action: 'strips' });
+    ok('strips returns a filmstrip image per candidate clip', r.content.filter((c) => c.type === 'image' && c.data.length > 2000).length === 2 && /Frame n is at second n/.test(r.text));
+    r = await call('frame_swarm', { action: 'direct', picks: [{ slot: 'one', asset: 'a2', start: 3, why: 'test pick' }, { slot: 'nope', asset: 'a1', start: 0 }] });
+    ok('direct applies the Director pick and names the bad one', /1\. ✓ .*a2 00:03\.00/.test(r.text) && /no slot "nope"/.test(r.text), r.text.split('\n')[0].slice(0, 160));
+  }
 } finally {
+  decideMock.close();
   daemon.kill(); fs.rmSync(tmp, { recursive: true, force: true });
 }
 console.log(failed ? `\n${failed} check(s) failed` : '\nAll checks passed');

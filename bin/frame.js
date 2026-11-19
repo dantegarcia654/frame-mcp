@@ -43,8 +43,9 @@ if (cmd === 'serve') {
   const wh = ['python3', 'python', 'py'].some((py) => spawnSync(py, ['-c', 'import whisper'], { encoding: 'utf8' }).status === 0);
   let ping = null; try { ping = await (await fetch(`${BASE}/api/ping`)).json(); } catch {}
   const { findChrome } = await import('../src/text.js'), { cutoutEngine } = await import('../src/cutout.js');
-  const chrome = findChrome(), cut = await cutoutEngine();
-  console.log(`Frame ${VERSION}\nnode     ${process.version}\nffmpeg   ${ff.status === 0 ? ff.stdout.split('\n')[0] : 'MISSING — install ffmpeg (macOS: brew install ffmpeg · Windows: winget install Gyan.FFmpeg)'}\nwhisper  ${wh ?'installed (transcripts + captions available)' : 'not installed (optional: pip install -U openai-whisper)'}\nchrome   ${chrome ? `${chrome} (draws captions and effects)` : 'not found — captions and effect clips need Chrome, Chromium, Edge or Brave'}\ncutout   ${cut.id ? cut.label : `not available: ${cut.reason}`}\nservice  ${ping ? `running at ${BASE}, ${ping.clients} window(s) open` : 'not running (starts on demand)'}\ndata     ${HOME}`);
+  const chrome = findChrome(), cut = await cutoutEngine(), dz = (await import('../src/decide.js')).decisionsConfig();
+  const speech = await (await import('../src/media.js')).transcriber();
+  console.log(`Frame ${VERSION}\nnode     ${process.version}\nffmpeg   ${ff.status === 0 ? ff.stdout.split('\n')[0] : 'MISSING — install ffmpeg (macOS: brew install ffmpeg · Windows: winget install Gyan.FFmpeg)'}\nspeech   ${speech ? `${speech.label} (transcripts + captions available)` : 'no engine — macOS 26+: xcode-select --install · anywhere: pip install -U openai-whisper'}\nwhisper  ${wh ? 'installed (fallback engine)' : 'not installed (optional fallback: pip install -U openai-whisper)'}\nchrome   ${chrome ? `${chrome} (draws captions and effects)` : 'not found — captions and effect clips need Chrome, Chromium, Edge or Brave'}\ncutout   ${cut.id ? cut.label : `not available: ${cut.reason}`}\nlabels   ${dz.on ? `on: gemini-decision-1, key from ${dz.source} (uploads a 360 px copy of each imported clip to Google)` : `off: ${dz.reason}`}\nservice  ${ping ? `running at ${BASE}, ${ping.clients} window(s) open` : 'not running (starts on demand)'}\ndata     ${HOME}`);
 } else {
   console.log(`Frame ${VERSION} — the live editing room for Claude
 

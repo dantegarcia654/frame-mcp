@@ -25,6 +25,7 @@
   <main>
     <aside id="left">
       <h3>Media <span id="mediaCount"></span></h3>
+      <div id="gen"></div>
       <div id="bin"></div>
       <h3 class="packH">Audio packs <span id="packCount"></span></h3>
       <div id="packs"></div>
@@ -84,6 +85,7 @@
   </footer>
 </div>
 <div id="cursor"><svg viewBox="0 0 12 16" width="12" height="16"><path d="M0 0v13l3.6-3.2L6 16l2.2-.9-2.4-6H11z" fill="#fff" stroke="#000"/></svg><span>Claude</span></div>
+<div id="genPanel" hidden><div class="sheet genSheet"><button id="closeGen">Close</button><h2></h2><div class="meta"></div><div class="gbar"><i></i></div><img alt="Latest composited frame"><div class="gnote dim"></div></div></div>
 <div id="modal" hidden><div class="sheet"><button id="closeModal">Close</button><h2></h2><div class="meta"></div><pre></pre></div></div>
 <script type="module" src="/app.js"></script>
 </body>

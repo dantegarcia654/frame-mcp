@@ -1,3 +1,7 @@
+import { moveAt } from './clip-move.js';
+import { graphicBounds, graphicTransform } from './canvas-geometry.js';
+import { PROPERTY_LABELS } from './revision-controls.js';
+import { timelineRows } from './timeline-groups.js';
 // Frame UI. Shows the daemon's project state live, previews the timeline in real time, and lets the human edit the same timeline.
 import { drawText, rasterText, textKey, reflowLines } from './text-draw.js';
 import { EFFECTS, drawEffect, trackAt, placeRect, mapBox, effectTime } from './effects.js';
@@ -8,7 +12,14 @@ const tc = (t) => { t = Math.max(0, t || 0); const m = Math.floor(t / 60); retur
 const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
 const dur = (c) => (c.out - c.in) / (c.speed || 1);
 const end = (c) => c.start + dur(c);
-const post = (body) => fetch('/api/ui', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json()).then((r) => { if (r.error) toast(r.error); return r; });
+let activePromptControl=null;
+function post(body){
+  const job=activePromptControl;
+  const payload={...body,...(job?{prompt_job:{id:job.id,client:job.client}}:{})};
+  if(new URLSearchParams(location.search).has('automation_check'))payload.test_context='automated-ui-check';
+  const promise=fetch('/api/ui',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(r=>r.json()).then(r=>{if(r.error)toast(r.error);return r;});
+  if(job)job.completion=promise;return promise;
+}
 
 let P = null;            // project
 let lastCallAt = 0;
@@ -25,21 +36,22 @@ const seenUi = new Set();
 // ───────────────────────── state stream
 function connect() {
   const es = new EventSource('/api/events');
-  es.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.type === 'state') onState(m); };
+  es.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.type === 'state') onState(m); else if (m.type === 'generating') { GEN = m.jobs || []; renderGen(); } };
   es.onerror = () => { setStatus('', 'Reconnecting…'); };
 }
 function onState(m) {
   const switched = !P || !m.project || P.id !== m.project.id;
   P = m.project; lastCallAt = m.lastCallAt || lastCallAt;
-  if (switched) { known = new Set(); knownFeed = new Set(); $('#feed').innerHTML = ''; sel = null; T = 0; firstState = true; autoFit = true; renderView = null; showRender(null); }
+  if (switched) { known = new Set(); knownFeed = new Set(); $('#feed').innerHTML = ''; sel = null; T = Math.max(0, Number(new URLSearchParams(location.search).get('t')) || 0); firstState = true; autoFit = true; renderView = null; showRender(null); }
   renderProjects(m.projects || []);
   $('#empty').hidden = !!(P && (P.clips.length || Object.keys(P.assets).length));
   if (!P) { $('#empty').hidden = false; return; }
   document.title = `${P.name} — Frame`;
   if (sel && !P.clips.some((c) => c.id === sel)) sel = null;
-  renderBin(); renderSteps(); renderFeed(); renderTimeline(); if (!textEditor) renderInspector(); renderStatus(); rasterizeTexts();
+  renderBin(); renderGen(); renderSteps(); renderFeed(); renderTimeline(); if (!textEditor) renderInspector(); renderStatus(); rasterizeTexts();
   if (m.focus) focus(m.focus);
   if (m.rendered) showRender(m.rendered);
+  renderCanvasTools(); processPromptJobs(P.promptJobs||[]);
   firstState = false;
 }
 
@@ -58,13 +70,14 @@ function renderStatus() {
   const bar = $('#renderBar');
   if (r && r.status === 'rendering') { bar.hidden = false; bar.querySelector('i').style.width = `${Math.round((r.progress || 0) * 100)}%`; bar.querySelector('span').textContent = `RENDERING ${Math.round((r.progress || 0) * 100)}%`; }
   else bar.hidden = true;
-  $('#pending').textContent = P.pending ? `${P.pending} item${P.pending > 1 ? 's' : ''} waiting — Claude reads them at its next step.` : 'Claude reads this at its next step.';
+  const activeJobs=(P.promptJobs||[]).filter(j=>['routing','ready','executing'].includes(j.status));
+  $('#pending').textContent = activeJobs.length ? `${activeJobs.length} prompts running · send another anytime` : 'Canvas changes run immediately. Review shows exact controls and values.';
   if (P.paused) return setStatus('hold', 'Paused by you');
   if (r && r.status === 'rendering') return setStatus('live', `Rendering ${Math.round((r.progress || 0) * 100)}%`);
   if (P.status.state === 'waiting') return setStatus('hold', 'Claude is waiting for you');
   if (ago < 6) return setStatus('live', 'Claude is editing');
   if (ago < 180) return setStatus('warm', `Claude active · last action ${Math.round(ago)}s ago`);
-  setStatus('', lastCallAt ? 'Idle' : 'Waiting for Claude');
+  setStatus(activeJobs.length?'busy':'', activeJobs.length?`${activeJobs.length} prompts running`:'Canvas ready');
 }
 setInterval(renderStatus, 1000);
 
@@ -91,13 +104,34 @@ async function loadPacks() {
 let fxListDone = false;
 function renderEffectsList() {
   if (fxListDone) return; fxListDone = true;
-  const box = $('#effects'); if (!box) return; $('#fxCount').textContent = Object.keys(EFFECTS).length;
+  const box = $('#effects'); if (!box) return; $('#fxCount').textContent = Object.values(EFFECTS).filter((fx) => !fx.hidden).length;
   for (const [id, fx] of Object.entries(EFFECTS)) {
+    if (fx.hidden) continue;
     const row = el('div', 'pkItem', `<span class="nm">${esc(fx.label)}</span><span class="dim">${fx.needs === 'cutout' ? 'cutout' : ''}</span>`); row.title = fx.about;
     const add = el('button', '', '+'); add.title = `Add ${fx.label} at the playhead`;
     add.onclick = () => { if (!P) return; const top = P.clips.filter((c) => c.kind === 'effect' && c.start < T + 1.5 && end(c) > T).map((c) => Number(c.track.slice(1))); post({ action: 'ops', ops: [{ op: 'add_effect', effect: id, start: Math.round(T * (P.fps || 30)) / (P.fps || 30), duration: 1.5, track: `V${Math.max(1, ...top) + 1}` }] }); };
     row.append(add); box.append(row);
   }
+}
+// The decision sheet on each clip: the model's guessed role and its confidence. A guess, never shown as a measurement.
+const DZ_TRUST = 0.7;
+const dzRanked = (ans) => Object.entries(ans?.probabilities || {}).sort((x, y) => y[1] - x[1]);
+function decisionBadge(a) {
+  const d = a.decisions; if (!d) return null;
+  if (d.status === 'pending') return el('div', 'dz busy-dz', 'labeling…');
+  if (d.status === 'failed') return el('div', 'dz', 'label failed');
+  const [role, conf] = dzRanked(d.answers?.role)[0] || [];
+  if (!role) return null;
+  const junk = d.answers.camera_junk?.noul >= 0.5;
+  // Percentage first so a narrow bin still shows it; an unsure guess is the inverted pill and ends in "?".
+  return el('div', `dz${conf < DZ_TRUST ? ' review' : ''}`, esc(`${Math.round(conf * 100)}% ${role.replace(/_/g, ' ')}${conf < DZ_TRUST ? '?' : ''}${junk ? ' · junk?' : ''}`));
+}
+function decisionTip(a) {
+  const d = a.decisions; if (!d) return '';
+  if (d.status !== 'done') return d.status === 'failed' ? `\nLabel failed: ${d.error}` : '\nLabeling…';
+  const r = dzRanked(d.answers.role).slice(0, 3).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(' · ');
+  const x = d.answers, sc = (q) => (q?.score != null ? `${Math.round(q.score * 10) / 10}/2` : '–');
+  return `\n${d.model} guess (not measured), pack "${d.pack}": ${r}\nhook ${sc(x.hook_strength)} · steady ${sc(x.stability)} · junk ${Math.round((x.camera_junk?.noul ?? 0) * 100)}%${x.drawing_visible ? ` · drawing visible ${Math.round(x.drawing_visible.noul * 100)}%` : ''}`;
 }
 function renderBin() {
   loadPacks(); renderEffectsList();
@@ -112,6 +146,7 @@ function renderBin() {
     else th.textContent = a.kind === 'audio' ? '♪' : '';
     const busy = a.busy || (a.cutting && `cutting out ${a.cutting}`) || (a.transcribing && 'transcribing');
     if (busy) th.append(el('div', 'busy', esc(busy)));
+    const dz = decisionBadge(a); if (dz) th.append(dz);
     d.append(th, el('div', 'nm', esc(a.name)), el('div', 'mt', `${a.id} · ${a.duration ? tc(a.duration) : a.kind}${a.transcript ? ' · words' : ''}${a.cutout ? ' · cutout' : ''}`));
     if (a.kind === 'video' && !a.busy && !a.cutting) { // the person cutout (frame_cutout): run it from here, or see what covers it
       const b = el('button', 'cut', a.cutout ? `Cutout ${tc(a.cutout.from)}–${tc(a.cutout.to)}` : 'Cut out person');
@@ -119,12 +154,61 @@ function renderBin() {
       b.onclick = (e) => { e.stopPropagation(); post({ action: 'cutout', asset: a.id }); };
       d.append(b);
     }
-    d.title = `${a.path}\n${a.width ? `${a.width}×${a.height} · ` : ''}${a.loudness ? `${a.loudness.lufs} LUFS` : ''}\nDouble-click to add at the end of the timeline`;
+    d.title = `${a.path}\n${a.width ? `${a.width}×${a.height} · ` : ''}${a.loudness ? `${a.loudness.lufs} LUFS` : ''}${decisionTip(a)}\nDouble-click to add at the end of the timeline`;
     d.ondblclick = () => post({ action: 'ops', ops: [{ op: 'add_clip', asset: a.id }] });
     bin.append(d);
   }
 }
 $('#addPath').onsubmit = (e) => { e.preventDefault(); const i = e.target.querySelector('input'); const v = i.value.trim().replace(/^['"]|['"]$/g, ''); if (v && P) post({ action: 'import', paths: [v] }).then((r) => { if (!r.error) i.value = ''; }); };
+
+// ───────────────────────── generating: assets still being made outside Frame (renders, composites, AI jobs)
+// Each job reports frames done/total and, every few frames, the frame it just composited. A tile per job sits on top of
+// the bin; clicking it opens a live view of that job.
+let GEN = [], genOpen = null, genShownV = {};
+const genPct = (j) => (j.total ? clamp(j.done / j.total, 0, 1) : null);
+function genEta(j) {
+  const el_ = (j.updatedAt - j.startedAt) / 1000, rate = el_ > 0 ? j.done / el_ : 0;
+  return { elapsed: el_, eta: j.total && rate > 0 ? (j.total - j.done) / rate : null };
+}
+function renderGen() {
+  const box = $('#gen'); const jobs = GEN.filter((j) => !P || !j.project_id || j.project_id === P.id);
+  box.innerHTML = '';
+  for (const j of jobs) {
+    const p = genPct(j), d = el('div', 'asset gen');
+    const th = el('div', 'th');
+    if (j.previewV) th.style.backgroundImage = `url(/api/generating/preview?job_id=${encodeURIComponent(j.job_id)}&v=${j.previewV})`;
+    const label = j.status === 'failed' ? 'Failed' : j.status === 'done' ? 'Done' : !j.done && j.note ? 'Preparing…' : `Generating… ${p == null ? '' : `${Math.round(p * 100)}%`}`;
+    th.append(el('div', 'gl', esc(label)));
+    const bar = el('div', 'gb'); bar.style.width = `${p == null ? 100 : p * 100}%`; if (p == null) bar.classList.add('ind'); th.append(bar);
+    const { eta } = genEta(j);
+    d.append(th, el('div', 'nm', esc(j.name)), el('div', 'mt', esc(!j.done && j.note ? j.note : `${j.total ? `${j.done}/${j.total}` : j.done || ''} ${j.kind || ''}${eta != null && j.status === 'running' ? ` · ~${Math.ceil(eta)}s left` : ''}`)));
+    d.title = `${j.name}\n${j.note || ''}\nClick to watch it being made`;
+    d.onclick = () => openGen(j.job_id);
+    box.append(d);
+  }
+  const n = jobs.filter((j) => j.status === 'running').length;
+  $('#mediaCount').textContent = `${P ? Object.keys(P.assets).length || '' : ''}${n ? ` · ${n} generating` : ''}`;
+  updateGenPanel();
+}
+function openGen(id) { genOpen = id; $('#genPanel').hidden = false; updateGenPanel(true); }
+function updateGenPanel(force) {
+  if (!genOpen) return;
+  const m = $('#genPanel'), j = GEN.find((x) => x.job_id === genOpen);
+  if (!j) { m.querySelector('.meta').textContent = 'Finished. The tile is gone; the result is in the bin if it was imported.'; return; }
+  const p = genPct(j), { elapsed, eta } = genEta(j);
+  m.querySelector('h2').textContent = j.name;
+  m.querySelector('.meta').textContent = `${j.status === 'running' ? 'Generating' : j.status} · ${p == null ? '…' : `${Math.round(p * 100)}%`} · ${j.total ? `frame ${j.done} of ${j.total}` : `${j.done} done`} · ${elapsed.toFixed(1)}s elapsed${eta != null && j.status === 'running' ? ` · ~${Math.ceil(eta)}s left` : ''}`;
+  m.querySelector('.gbar i').style.width = `${p == null ? 100 : p * 100}%`;
+  m.querySelector('.gnote').textContent = j.note || '';
+  const img = m.querySelector('img');
+  if (j.previewV && (force || genShownV[j.job_id] !== j.previewV)) { genShownV[j.job_id] = j.previewV; img.src = `/api/generating/preview?job_id=${encodeURIComponent(j.job_id)}&v=${j.previewV}`; }
+  img.hidden = !j.previewV;
+}
+const closeGen = () => { genOpen = null; $('#genPanel').hidden = true; };
+$('#closeGen').onclick = closeGen;
+$('#genPanel').onclick = (e) => { if (e.target.id === 'genPanel') closeGen(); };
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && genOpen) closeGen(); });
+
 
 function renderSteps() {
   const box = $('#steps'); box.dataset.empty = 'Scripts, generations and other work Claude does outside the timeline show up here, with the exact code.';
@@ -143,6 +227,7 @@ function modal(title, meta, code, img) {
   const m = $('#modal'); m.hidden = false;
   m.querySelector('h2').textContent = title; m.querySelector('.meta').textContent = meta || '';
   const pre = m.querySelector('pre'); pre.hidden = !code; pre.textContent = code || '';
+  m.querySelectorAll('.revisionBody,.revisionActions').forEach(x=>x.remove());
   m.querySelector('img')?.remove(); if (img) { const i = el('img'); i.src = img; m.querySelector('.sheet').append(i); }
 }
 $('#closeModal').onclick = () => ($('#modal').hidden = true);
@@ -155,9 +240,10 @@ function renderFeed() {
   for (const f of P.feed) {
     if (knownFeed.has(f.id)) continue; knownFeed.add(f.id);
     const d = el('div', `f ${f.kind} ${f.actor === 'user' ? 'user' : ''}`);
-    const who = f.actor === 'user' ? 'You' : f.actor === 'frame' ? 'Frame' : (f.agent || 'Claude');
+    const who = f.actor === 'user' ? 'You' : (f.agent || (f.actor === 'frame' ? 'Frame' : 'Claude'));
     const tag = { thinking: 'thinking', decision: 'decision', plan: 'plan', question: 'asks you', look: 'looked', render: 'render', step: 'process', op: f.op }[f.kind] || '';
     d.innerHTML = `<div class="who"><span>${esc(who)}${tag ? ' · ' + esc(tag) : ''}</span><span>${new Date(f.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span></div><div class="tx">${esc(f.text)}</div>${f.why ? `<div class="why">${esc(f.why)}</div>` : ''}`;
+    if(f.revisionId){ const b=el('button','reviewChange','Review change'); b.onclick=e=>{e.stopPropagation();openRevision(f.revisionId);};d.append(b); }
     if (f.img) { const i = el('img'); i.src = f.img; i.onclick = (e) => { e.stopPropagation(); modal(f.text, f.why, null, f.img); }; d.append(i); }
     if (f.kind === 'op' || f.kind === 'look') d.onclick = () => { if (f.t != null) seek(f.t); if (f.clipIds?.length && P.clips.some((c) => c.id === f.clipIds[0])) select(f.clipIds[0]); };
     if (f.kind === 'step') d.onclick = () => openStep(f.stepId);
@@ -171,12 +257,13 @@ function renderFeed() {
   if (stick || firstState) box.scrollTop = box.scrollHeight;
 }
 const composer = $('#composer textarea');
-function sendMessage() { const v = composer.value.trim(); if (!v || !P) return; post({ action: 'message', text: v, t: T, clip: sel }); composer.value = ''; }
+function sendMessage() { const v = composer.value.trim(); if (!v || !P) return; post({ action: 'prompt', text: v, t: T, clip: sel }); composer.value = ''; }
 $('#composer').onsubmit = (e) => { e.preventDefault(); sendMessage(); };
 composer.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } };
 
 // ───────────────────────── timeline
-const laneH = (t) => (t[0] === 'V' ? 50 : t[0] === 'T' ? 26 : 38);
+const expandedGraphicGroups = new Set();
+const laneH = (t) => (P?.clips.some(c => c.track === t && c.effect?.type === 'live_graphic') ? 40 : t[0] === 'V' ? 50 : t[0] === 'T' ? 26 : 38);
 const view = (c) => (drag && drag.id === c.id ? { ...c, ...drag.cur } : textDrag && textDrag.c.id === c.id ? textDrag.c : c); // a caption being dragged in the preview keeps its live position
 function fitPps() { const w = $('#scroll').clientWidth - 30; return clamp(w / Math.max(P?.duration || 0, 8), 4, 400); }
 function renderTimeline() {
@@ -191,15 +278,46 @@ function renderTimeline() {
   for (let t = 0; t <= total; t += step) { const i = el('i', '', tc(t).replace(/\.00$/, '')); i.style.left = `${t * pps}px`; ruler.append(i); }
   // lanes
   const heads = $('#heads'), rows = $('#rows'); heads.innerHTML = ''; rows.innerHTML = '';
-  for (const t of P.tracks) {
-    const h = el('div', '', t); h.style.height = `${laneH(t)}px`; heads.append(h);
-    const lane = el('div', 'lane'); lane.style.height = `${laneH(t)}px`; lane.dataset.track = t; rows.append(lane);
-    for (const raw of P.clips.filter((c) => c.track === t)) lane.append(clipEl(raw, laneH(t)));
+  for (const item of timelineRows(P,expandedGraphicGroups)) {
+    if(item.kind === 'track') {
+      const t=item.track;
+      const h = el('div', '', esc(P.trackLabels?.[t] || ({V1:'Footage',T1:'Captions',A1:'Audio'}[t]) || t)); h.title = `${t} · ${P.trackLabels?.[t] || t}`; h.style.height = `${laneH(t)}px`; heads.append(h);
+      const lane = el('div', 'lane'); lane.style.height = `${laneH(t)}px`; lane.dataset.track = t; rows.append(lane);
+      for (const raw of P.clips.filter((c) => c.track === t)) lane.append(clipEl(raw, laneH(t)));
+    } else {
+      const height=item.kind==='graphics'?58:30;
+      const h=el('div','groupHead');h.style.height=`${height}px`;
+      const toggle=el('button','layerToggle',`${expandedGraphicGroups.has(item.key)?'▾':'▸'} ${esc(item.name)} <small>${item.clips.length}</small>`);
+      toggle.setAttribute('aria-expanded',String(expandedGraphicGroups.has(item.key)));
+      toggle.onclick=()=>{expandedGraphicGroups.has(item.key)?expandedGraphicGroups.delete(item.key):expandedGraphicGroups.add(item.key);renderTimeline();};h.append(toggle);heads.append(h);
+      const lane=el('div','lane graphicSummary');lane.style.height=`${height}px`;lane.dataset.group=item.key;rows.append(lane);
+      if(item.kind==='graphics') renderGraphicOverview(lane,item.clips,height);
+      else {
+        for(const c of item.clips){const bar=el('div','groupElement');bar.style.left=`${c.start*pps}px`;bar.style.width=`${Math.max(2,dur(c)*pps)}px`;bar.title=c.label||c.id;bar.onclick=e=>{e.stopPropagation();select(c.id);seek(c.start+.15);};lane.append(bar);}
+      }
+    }
   }
   known = new Set(P.clips.map((c) => c.id));
   const mk = $('#markers'); mk.innerHTML = '';
   for (const m of P.markers) { const i = el('i', '', esc(m.label)); i.style.left = `${m.t * pps}px`; mk.append(i); }
   placePlayhead();
+}
+function renderGraphicOverview(lane,clips,height){
+  const cards=clips.filter(c=>c.effect.params.nodes.some(n=>n.id.endsWith('-canvas')));
+  for(const c of cards){
+    const name=c.effect.params.nodes[0].id.replace('-canvas','');
+    const titles={refs:'References',details:'Type & spacing',real:'Real content',options:'Directions',terminal:'Prompt',controls:'Controls',phone:'Phone check',loop:'Recap'};
+    const block=el('div','clip graphicCard');block.style.left=`${c.start*pps}px`;block.style.width=`${Math.max(3,dur(c)*pps)}px`;block.dataset.card=name;
+    const tile=document.createElement('canvas');tile.width=90;tile.height=160;const g=tile.getContext('2d');g.fillStyle='#35332f';g.fillRect(0,0,90,160);
+    const at=c.start+Math.min(dur(c)*.5,1.2);
+    const order=t=>Number(t.slice(1));
+    for(const part of [...clips].sort((a,b)=>order(a.track)-order(b.track)))if(at>=part.start&&at<end(part)){const {t,d}=effectTime(part,at);drawEffect(g,part,{W:90,H:160,t,d,make:makeCanvas});}
+    tile.style.objectFit='contain';block.append(tile,el('span','lb',esc(titles[name]||name)));
+    block.title=`${titles[name]||name} — click to inspect; expand Graphics for individual elements`;
+    block.onmousedown=e=>e.stopPropagation();
+    block.onclick=e=>{e.stopPropagation();if(renderView)showRender(null);seek(at);const part=clips.find(x=>x.effect.params.nodes[0].kind==='text'&&at>=x.start&&at<end(x));if(part)select(part.id);};
+    lane.append(block);
+  }
 }
 function clipEl(raw, h) {
   const c = view(raw), a = P.assets[c.asset];
@@ -210,6 +328,20 @@ function clipEl(raw, h) {
   if (c.kind === 'text') d.append(el('span', 'lb', esc(c.text.content)));
   else if (c.kind === 'effect') {
     const fx = EFFECTS[c.effect?.type];
+    if (c.effect?.type === 'live_graphic') {
+      const strip = document.createElement('canvas'); strip.width = Math.min(2400, Math.ceil(w)); strip.height = h - 6;
+      const g = strip.getContext('2d'), tileW = (h - 6) * P.width / P.height;
+      const count = Math.ceil(strip.width / tileW);
+      for (let k = 0; k < count; k++) {
+        const sample = (k + .5) / count * dur(c), tile = document.createElement('canvas');
+        tile.width = Math.ceil(tileW); tile.height = h - 6;
+        const tg = tile.getContext('2d'); tg.fillStyle = '#35332f'; tg.fillRect(0, 0, tile.width, tile.height);
+        drawEffect(tg, c, { W:tile.width, H:tile.height, t:c.in + sample, d:c.out, make:makeCanvas });
+        for (const caption of P.clips.filter(x=>x.kind==='text' && c.start+sample>=x.start && c.start+sample<end(x))) drawText(tg,caption,tile.width,tile.height);
+        g.drawImage(tile,k*tileW,0); g.strokeStyle='#777'; g.strokeRect(k*tileW,0,tileW,strip.height);
+      }
+      strip.title='Live design thumbnails — scrub here to preview'; d.append(strip);
+    }
     d.append(el('span', 'lb', esc(c.label || fx?.label || c.effect?.type)));
     const u = P.clips.find((x) => x.track === (c.source || 'V1') && x.kind === 'video' && x.start < end(c) && end(x) > c.start), a = u && P.assets[u.asset];
     d.append(el('span', 'fx', fx?.needs === 'cutout' && !a?.cutout ? 'NEEDS CUTOUT' : 'FX'));
@@ -250,7 +382,7 @@ async function drawWave(cv, c, a) {
   }
 }
 function placePlayhead() { $('#playhead').style.left = `${T * pps}px`; $('#tc').textContent = tc(T); }
-function select(id) { sel = id; document.querySelectorAll('.clip').forEach((d) => d.classList.toggle('sel', d.dataset.id === id)); renderInspector(); }
+function select(id) { sel = id; document.querySelectorAll('.clip').forEach((d) => d.classList.toggle('sel', d.dataset.id === id)); renderInspector(); renderCanvasTools(); }
 
 // manual editing: move / trim
 function startDrag(e, raw) {
@@ -314,15 +446,20 @@ $('#fit').onclick = () => { autoFit = true; $('#zoom').value = 0; renderTimeline
 addEventListener('resize', () => { if (P) renderTimeline(); sizeViewer(); });
 
 // Claude's cursor: fly to whatever it just changed.
-let cursorTimer;
+const roleCursors = new Map();
 function focus(f) {
-  const cur = $('#cursor'); let target = null;
+  const role = f.agent || 'Codex';
+  let record = roleCursors.get(role);
+  if (!record) { const cur = $('#cursor').cloneNode(true); cur.removeAttribute('id'); cur.classList.add('editCursor'); document.body.append(cur); record = { cur, timer:null }; roleCursors.set(role, record); }
+  const cur = record.cur; let target = null;
   for (const id of f.clipIds || []) { const d = document.querySelector(`.clip[data-id="${id}"]`); if (d) { d.classList.add('touch'); target ||= d; } }
   if ($('#follow').checked && f.t != null && !playing && !drag) { if (renderView) showRender(null); seek(Math.min(f.t + 0.02, Math.max(0, P.duration - 1 / (P.fps || 30)))); const sc = $('#scroll'); const x = f.t * pps; if (!autoFit && (x < sc.scrollLeft || x > sc.scrollLeft + sc.clientWidth - 80)) sc.scrollLeft = Math.max(0, x - sc.clientWidth / 3); }
+  if (!target && (f.clipIds||[]).some(id=>P.clips.find(c=>c.id===id)?.effect?.type==='live_graphic')) target=document.querySelector('[data-group="graphics"]');
+  if (target && $('#follow').checked) target.scrollIntoView({block:'nearest',inline:'nearest'});
   const r = (target || $('#playhead')).getBoundingClientRect();
   cur.querySelector('span').textContent = f.agent || 'Claude';
   cur.style.opacity = 1; cur.style.transform = `translate(${clamp(r.left + Math.min(r.width / 2, 40), 0, innerWidth - 80)}px, ${r.top + r.height / 2}px)`;
-  clearTimeout(cursorTimer); cursorTimer = setTimeout(() => (cur.style.opacity = 0), 2600);
+  clearTimeout(record.timer); record.timer = setTimeout(() => (cur.style.opacity = 0), 4000);
 }
 
 // ───────────────────────── inspector
@@ -332,6 +469,7 @@ const FIELDS = [
   num('Scale', 'scale', 0.01), num('X', 'x', 0.01), num('Y', 'y', 0.01), num('Opacity', 'opacity', 0.05), num('Fade in', 'fadeIn', 0.05), num('Fade out', 'fadeOut', 0.05),
 ];
 $('#inspector').addEventListener('focusout', () => setTimeout(() => { if (P && !$('#inspector').contains(document.activeElement)) renderInspector(); }, 0)); // catch up on changes skipped while typing
+let graphicNodeId = null;
 function renderInspector() {
   const box = $('#inspector'); const ae = document.activeElement;
   if (ae && box.contains(ae) && ae.tagName !== 'BUTTON') return; // don't rebuild while typing
@@ -343,7 +481,7 @@ function renderInspector() {
       <div class="kv"><span>Canvas</span><span>${P.width}×${P.height}</span></div><div class="kv"><span>Frame rate</span><span>${P.fps}</span></div>
       <div class="kv"><span>Duration</span><span>${tc(P.duration)}</span></div><div class="kv"><span>Clips</span><span>${P.clips.length}</span></div>
       <div class="kv"><span>Timeline version</span><span>${P.version}</span></div>
-      ${r ? `<h3>Last render</h3><div class="kv"><span>Size</span><span>${r.width}×${r.height}</span></div><div class="kv"><span>Length</span><span>${tc(r.duration)}</span></div>${r.loudness ? `<div class="kv"><span>Loudness</span><span>${r.loudness.lufs} LUFS</span></div>` : ''}<div class="acts"><button id="playLast" class="solid">▶ Play</button><button id="revealLast">Show file</button><button id="approveLast" title="Copy this render to ~/Movies/Frame/Approved (never overwrites)">Approve &amp; save</button></div>` : ''}
+      ${r ? `<h3>Saved export</h3><div class="kv"><span>Size</span><span>${r.width}×${r.height}</span></div><div class="kv"><span>Length</span><span>${tc(r.duration)}</span></div>${r.loudness ? `<div class="kv"><span>Loudness</span><span>${r.loudness.lufs} LUFS</span></div>` : ''}<div class="acts"><button id="playLast" class="solid">▶ Play</button><button id="revealLast">Show file</button><button id="approveLast" title="Copy this render to ~/Movies/Frame/Approved (never overwrites)">Approve &amp; save</button></div>` : ''}
       <div class="sec" style="padding-top:16px;text-transform:none;letter-spacing:0;line-height:1.5">Select a clip to see and change exactly what Claude set on it.</div>`;
     if (r) { $('#playLast').onclick = () => showRender(r.id); $('#revealLast').onclick = () => post({ action: 'reveal', id: r.id }); $('#approveLast').onclick = () => post({ action: 'approve', id: r.id }).then((x) => x.file && toast(`Saved: ${x.file}`)); }
     return;
@@ -360,8 +498,29 @@ function renderInspector() {
     row('Start', numIn(c.start, 0.01, (v) => send({ start: v })));
     row('Duration', numIn(+dur(c).toFixed(3), 0.01, (v) => send({ duration: v })));
     row('Reads', (() => { const i = el('input'); i.value = c.source || 'V1'; i.onchange = () => { send({ source: i.value.trim().toUpperCase() }); i.blur(); }; return i; })());
+    if (c.effect.type === 'live_graphic') {
+      box.append(el('div', 'sec', 'Graphic layers — changes preview live'));
+      const nodes = c.effect.params.nodes;
+      const choose = el('select');
+      const active = nodes.filter(n => T >= (n.at || 0) && T < (n.until ?? Infinity));
+      const list = active.length ? active : nodes;
+      if (!list.some(n => n.id === graphicNodeId)) graphicNodeId = list.find(n=>n.kind==='text')?.id || list[0]?.id;
+      choose.innerHTML = list.map(n=>`<option value="${esc(n.id)}" ${n.id === graphicNodeId ? 'selected' : ''}>${esc(n.text || n.id)}</option>`).join('');
+      choose.onchange = () => { graphicNodeId = choose.value; choose.blur(); renderInspector(); }; row('Layer', choose);
+      const node = nodes.find(n=>n.id === graphicNodeId);
+      if (node) {
+        const patch = change => post({action:'ops', ops:[{op:'patch_graphic',id:c.id,node_id:node.id,patch:change}]});
+        if (node.kind === 'text' || node.kind === 'pixtext') { const input=el('input'); input.value=node.text; input.oninput=()=>patch({text:input.value}); row('Text',input); }
+        for (const key of ['color','fill','stroke'].filter(key=>node[key])) { const input=el('input'); input.type='color'; input.value=node[key]; input.oninput=()=>patch({[key]:input.value}); row(key === 'fill' ? 'Fill' : key === 'stroke' ? 'Border' : 'Color',input); }
+        for(const [key,options] of [['font',['sans','serif','mono']],['weight',[400,700,'italic','italic bold']],['motion',['none','float']],['reveal',['none','type','words']],['align',['left','center','right']]]) if(node[key]!=null){const input=el('select');input.innerHTML=options.map(v=>`<option value="${esc(v)}" ${v===node[key]?'selected':''}>${esc(v)}</option>`).join('');input.onchange=()=>patch({[key]:key==='weight'&&!isNaN(Number(input.value))?Number(input.value):input.value});row(PROPERTY_LABELS[key],input);}
+        if(node.kind==='brand'){const input=el('select');const options={'claude-mark':'Claude symbol','claude-wordmark':'Claude wordmark',clawd:'Clawd'};input.innerHTML=Object.entries(options).map(([v,label])=>`<option value="${v}" ${v===node.asset?'selected':''}>${label}</option>`).join('');input.onchange=()=>{const ratio={'claude-mark':1,'claude-wordmark':125/573,clawd:38/47}[input.value];patch({asset:input.value,h:node.w*P.width/P.height*ratio});};row('Artwork',input);}
+        if(node.cues){const input=el('input');input.value=node.cues.join(', ');input.onchange=()=>patch({cues:input.value.split(',').map(x=>Number(x.trim()))});row('Word timings',input);}
+        for (const [key,label] of [['x','Position X'],['y','Position Y'],['w','Width'],['h','Height'],['size','Type size'],['radius','Corner radius'],['lineWidth','Border width'],['shadow','Shadow'],['fade','Entrance fade'],['speed','Animation speed'],['at','Visible from'],['until','Visible until'],['highlightAt','Highlight time'],['phase','Phase'],['value','Value']].filter(([key])=>node[key]!=null)) row(label,numIn(node[key],.005,v=>patch({[key]:v})));
+      }
+    }
     box.append(el('div', 'sec', 'Settings'));
     for (const [k, s] of Object.entries(fx?.params || {})) {
+      if (c.effect.type === 'live_graphic' && k === 'nodes') continue;
       const v = c.effect.params[k];
       let input;
       if (s.kind === 'number') input = numIn(v, s.step || (s.max - s.min > 20 ? 1 : 0.01), (x) => send({ params: { [k]: x } }));
@@ -478,7 +637,7 @@ function syncMedia(m, c, t, active) {
 function drawVisual(src, sw0, sh0, c, t, ctx = cv.getContext('2d'), Wc = cv.width, Hc = cv.height, { grade = true, key = true } = {}) {
   const k = Wc / P.width;
   const s = (c.fit === 'contain' ? Math.min(P.width / sw0, P.height / sh0) : Math.max(P.width / sw0, P.height / sh0)) * (c.scale || 1);
-  const w = sw0 * s * k, h = sh0 * s * k, x = (Wc - w) / 2 + (c.x || 0) * Wc, y = (Hc - h) / 2 + (c.y || 0) * Hc;
+  const mv = moveAt(c, t - c.start), w = sw0 * s * k, h = sh0 * s * k, x = (Wc - w) / 2 + ((c.x || 0) + mv.x) * Wc, y = (Hc - h) / 2 + ((c.y || 0) + mv.y) * Hc;
   const g = grade && c.grade; const filter = g ? `brightness(${g.brightness ?? 1}) contrast(${g.contrast ?? 1}) saturate(${g.saturation ?? 1})` : 'none';
   ctx.globalAlpha = clamp((c.opacity ?? 1) * fadeK(c, t), 0, 1);
   if (key && c.key) {
@@ -501,6 +660,7 @@ function drawVisual(src, sw0, sh0, c, t, ctx = cv.getContext('2d'), Wc = cv.widt
   ctx.filter = 'none'; ctx.globalAlpha = 1;
 }
 // ───────────────────────── captions in the preview: drag to move, handles to size, double-click to type
+let graphicHits=[], graphicDraft=null, graphicDrag=null, graphicInline=null;
 let textHits = [], textDrag = null, textEditor = null, selHit = null;
 const handleSize = () => Math.max(14, cv.width / 45);
 function drawSelection(hit, id) { // the selected caption's box and handles: round corner = text size, square side = line width
@@ -605,8 +765,16 @@ function syncMatte(m, want, rate) {
   else { if (!m.paused) m.pause(); if (!m.seeking && Math.abs(m.currentTime - want) > 0.5 / (P.fps || 30)) m.currentTime = want; }
 }
 function drawEffectClip(c) {
+  if(graphicDraft?.clip_id===c.id)c={...c,effect:{...c.effect,params:{...c.effect.params,nodes:c.effect.params.nodes.map(n=>n.id===graphicDraft.node_id?{...n,...graphicDraft.patch}:n)}}};
   const fx = EFFECTS[c.effect?.type]; if (!fx) return;
   const W = cv.width, H = cv.height;
+  if (fx.input === false) {
+    const {t,d}=effectTime(c,T); ctx.save(); ctx.globalAlpha=clamp((c.opacity??1)*fadeK(c,T),0,1);
+    try { drawEffect(ctx,c,{W,H,t,d,unit:P.width/W,make:makeCanvas});
+      for(const node of c.effect.params.nodes){if(t>=(node.at||0)&&t<(node.until??Infinity))graphicHits.push({clip_id:c.id,node_id:node.id,node,...graphicBounds(ctx,node,W,H,t)});}
+    } finally {ctx.restore();}
+    return;
+  }
   for (const k in fxCv) if (fxCv[k].width !== W || fxCv[k].height !== H) { fxCv[k].width = W; fxCv[k].height = H; matteShown = null; }
   const u = under[c.source || 'V1'], bg = fxCv.base.getContext('2d');
   bg.globalAlpha = 1; bg.fillStyle = '#000'; bg.fillRect(0, 0, W, H);
@@ -646,7 +814,7 @@ function tick() {
   sizeViewer();
   if (playing) { T = playT0 + (performance.now() - playW0) / 1000; if (T >= P.duration) { T = P.duration; playing = false; $('#play').textContent = '▶'; } placePlayhead(); const sc = $('#scroll'), x = T * pps; if (!autoFit && x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - 60; }
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
-  textHits = []; selHit = null; fxApprox = false;
+  graphicHits=[];textHits = []; selHit = null; fxApprox = false;
   for (const s of slots.values()) s.used = false;
   for (const k of Object.keys(under)) delete under[k];
   for (const m of mattes.values()) m.used = false;
@@ -664,6 +832,7 @@ function tick() {
       if (active && c.kind === 'video') { if (m.readyState >= 2 && !m.seeking) { const a = P.assets[c.asset]; drawVisual(m, a.width, a.height, c, T); under[c.track] = { src: m, sw: a.width, sh: a.height, clip: c }; } else stalled = true; }
     });
   }
+  drawCanvasSelection();
   // A video that is still seeking/loading must not flash black: hold the last complete frame instead.
   if (stalled && lastGood.width) ctx.drawImage(lastGood, 0, 0, cv.width, cv.height);
   else if (!stalled) { if (lastGood.width !== cv.width || lastGood.height !== cv.height) { lastGood.width = cv.width; lastGood.height = cv.height; } lastGood.getContext('2d').drawImage(cv, 0, 0); }
@@ -710,4 +879,220 @@ let lastRaf = 0;
 const loop = () => { lastRaf = performance.now(); tick(); requestAnimationFrame(loop); };
 setInterval(() => { if (performance.now() - lastRaf > 250) tick(); }, 60);
 connect(); requestAnimationFrame(loop);
-window.__frame = { slots, get P() { return P; }, get T() { return T; }, get sel() { return sel; }, get selHit() { return selHit; }, get textHits() { return textHits; }, seek, togglePlay, select };
+window.__frame = { slots, get P() { return P; }, get T() { return T; }, get sel() { return sel; }, get selHit() { return selHit; }, get textHits() { return textHits; }, get graphicHits(){return graphicHits;}, seek, togglePlay, select };
+
+// Shared revision history: real property changes, not a replay of invented mouse actions.
+const revisionValue=v=>v===undefined?'Not set':typeof v==='object'?JSON.stringify(v):String(v);
+function openChanges(){
+  modal('Changes','Select a revision to inspect its controls, compare the element, or revert it.',null);
+  const list=el('div','revisionBody changeList');
+  const revisions=P?.revisions||[];
+  if(!revisions.length)list.textContent='New changes from the inspector and the agent will appear here.';
+  for(const r of [...revisions].reverse()){
+    const b=el('button','changeItem');b.textContent=`${r.author.name} · ${r.components[0]?.label||r.operation.op} · ${new Date(r.at).toLocaleTimeString()}`;b.onclick=()=>openRevision(r.id);list.append(b);
+  }
+  $('#modal .sheet').append(list);
+}
+function openRevision(id){
+  const r=P?.revisions?.find(r=>r.id===id);if(!r)return toast('This revision is no longer available.');
+  modal('Review change',`${r.author.name} · ${r.method} · ${new Date(r.at).toLocaleTimeString()}`,null);
+  const body=el('div','revisionBody');
+  for(const part of r.components){
+    body.append(el('h3','',esc(part.label)));
+    const comparison=el('div','revisionCompare');
+    for(const [label,clip] of [['Before',part.before],['After',part.after]]){
+      const column=el('div');column.append(el('b','',label));
+      if(clip&&(clip.effect?.type==='live_graphic'||clip.kind==='text')){
+        const canvas=document.createElement('canvas');canvas.width=270;canvas.height=480;const g=canvas.getContext('2d');g.fillStyle='#40413d';g.fillRect(0,0,270,480);
+        if(clip.kind==='text')drawText(g,clip,270,480);
+        else {const node=clip.effect.params.nodes[0];const t=Math.min(clip.out-.001,Math.max(clip.in+.25,(node.highlightAt||0)+.1));g.globalAlpha=clip.opacity??1;drawEffect(g,clip,{W:270,H:480,t,d:clip.out,make:makeCanvas});}
+        column.append(canvas);
+      }else column.append(el('p','',clip?'Timeline element':'Not present'));
+      comparison.append(column);
+    }
+    body.append(comparison,el('small','', 'Element preview. Other scene layers are omitted.'));
+    const table=el('table','revisionTable','<thead><tr><th>Control</th><th>Before</th><th>After</th></tr></thead>');
+    const tbody=el('tbody');
+    for(const ch of part.changes){const property=ch.path.at(-1),percent=part.after?.effect?.type==='live_graphic'&&['size','x','y','w','h','radius'].includes(property);const label=percent?({size:'Size %',x:'X %',y:'Y %',w:'Width %',h:'Height %',radius:'Corners %'}[property]):ch.control||'Element';const value=v=>percent&&typeof v==='number'?String(Math.round(v*1e8)/1e6):revisionValue(v);const row=el('tr');for(const v of [label,value(ch.before),value(ch.after)])row.append(el('td','',esc(v)));tbody.append(row);}
+    table.append(tbody);body.append(table);
+    const node=part.after?.effect?.params?.nodes?.[0];
+    body.append(el('p','manualSteps',`To make this by hand: select <b>${esc(part.label)}</b> on the canvas, or click Inspect element below. Use the controls beneath the canvas to set the After values above. Click More for additional properties.`));
+  }
+  const actions=el('div','revisionActions');
+  const inspect=el('button','','Inspect element');inspect.onclick=()=>{$('#modal').hidden=true;if(renderView)showRender(null);if(r.time!=null)seek(r.time+.2);select(r.components[0].id);};actions.append(inspect);
+  const revert=el('button','solid','Revert this change');revert.disabled=!r.revertible||!!r.revertedAt;
+  revert.title=r.revertible?'Revert only these properties; preserve other later changes.':'Use timeline Undo for structural revisions.';
+  revert.onclick=async()=>{revert.disabled=true;const result=await post({action:'revert_revision',id:r.id});if(result.error){revert.disabled=false;return;}$('#modal').hidden=true;};actions.append(revert);
+  const back=el('button','','All changes');back.onclick=openChanges;actions.append(back);
+  $('#modal .sheet').append(body,actions);
+}
+const changesButton=el('button','','Changes');changesButton.id='changes';changesButton.onclick=openChanges;$('#undo').before(changesButton);
+
+// Direct canvas editing. Humans and prompt cursors call the same visible controls and commit path.
+const canvasTools=el('div','canvasTools');canvasTools.id='canvasTools';canvasTools.hidden=true;$('#transport').before(canvasTools);
+let canvasToolsKey='';
+const rounded=v=>Math.round(v*1e6)/1e6;
+function commitGraphicChange(c,node,patch){
+ const normalized=Object.fromEntries(Object.entries(patch).map(([k,v])=>[k,typeof v==='number'?rounded(v):v]));
+ if(c.kind==='text'){const style={...normalized};delete style.text;if(style.font)style.font={serif:'Georgia',sans:'Arial',mono:'Menlo'}[style.font];return post({action:'ops',surface:'canvas',ops:[{op:'update_clip',id:c.id,...(normalized.text!=null?{text:normalized.text}:{}),...(Object.keys(style).length?{style}:{})}]});}
+ return post({action:'ops',surface:'canvas',ops:[{op:'patch_graphic',id:c.id,node_id:node.id,patch:normalized}]});
+}
+function selectedGraphic(){const c=P?.clips.find(c=>c.id===sel);if(c?.kind==='text')return {c,node:{...c.text,id:c.id,kind:'text',text:c.text.content,font:/Georgia/.test(c.text.font)?'serif':/Menlo|Courier/.test(c.text.font)?'mono':'sans'}};return c?.effect?.type==='live_graphic'?{c,node:c.effect.params.nodes[0]}:null;}
+function renderCanvasTools(){
+ const item=selectedGraphic();if(renderView){canvasTools.hidden=true;canvasToolsKey='';return;}
+ if(!item){canvasTools.hidden=false;canvasTools.dataset.empty='true';canvasToolsKey='';canvasTools.textContent='Select an object · drag to move · use a corner to resize · double-click text';return;}
+ canvasTools.dataset.empty='false';
+ if(canvasTools.contains(document.activeElement))return;
+ const {c,node}=item,key=JSON.stringify([c.id,node]);canvasTools.hidden=false;if(key===canvasToolsKey)return;canvasToolsKey=key;canvasTools.replaceChildren();
+ const name=el('strong','canvasObjectName',esc(c.label||node.text||node.id));name.title='Selected canvas object';canvasTools.append(name);
+ const field=(label,type,value,property,unit)=>{
+  const wrap=el('label','canvasField'),caption=el('span','',esc(label)),input=el('input');input.type=type;input.value=value;input.dataset.control=property;if(unit)input.dataset.unit=unit;
+  input.setAttribute('aria-label',label);if(type==='number')input.step=unit==='percent'?'.1':'.1';
+  input.onchange=()=>commitGraphicChange(c,node,{[property]:type==='number'?Number(input.value)/(unit==='percent'?100:1):input.value});
+  wrap.append(caption,input);canvasTools.append(wrap);return input;
+ };
+ if(node.kind==='text'||node.kind==='pixtext')field('Text','text',node.text,'text');
+ // the colour you see: after its highlight time an element shows its accent, so that is the colour control offered
+ const lit=node.accent&&node.highlightAt!=null&&T-c.start+(c.in||0)>=node.highlightAt;
+ const colorProperty=lit?'accent':node.fill?'fill':'color';field(lit?'Highlight':colorProperty==='fill'?'Fill':'Color','color',node[colorProperty]||'#d97757',colorProperty);
+ if(node.kind==='text'){
+  field('Size %','number',rounded(node.size*100),'size','percent');
+  field('Weight','number',node.weight||400,'weight');
+  const wrap=el('label','canvasField'),caption=el('span','','Typeface'),input=el('select');input.dataset.control='font';input.setAttribute('aria-label','Typeface');
+  for(const v of ['sans','serif','mono']){const o=el('option','',v);o.value=v;o.selected=node.font===v;input.append(o);}input.onchange=()=>commitGraphicChange(c,node,{font:input.value});wrap.append(caption,input);canvasTools.append(wrap);
+ }else if(node.kind==='pixtext'||node.kind==='sprite')field('Size %','number',rounded((node.size??.005)*100),'size','percent');
+ else if(node.kind==='slider')field('Speed','number',node.speed||0,'speed');
+ else if(node.w!=null)field('Width %','number',rounded(node.w*100),'w','percent');
+ if(node.kind==='rect'&&node.h!=null)field('Height %','number',rounded(node.h*100),'h','percent');
+ for(const key of ['x','y'])field(key.toUpperCase()+' %','number',rounded(node[key]*100),key,'percent');
+ if(node.radius!=null)field('Corners %','number',rounded(node.radius*100),'radius','percent');
+ const more=el('button','','More');more.onclick=()=>{renderInspector();$('#inspector').scrollIntoView({block:'nearest'});};canvasTools.append(more);
+}
+function drawCanvasSelection(){
+ const hit=graphicHits.findLast(h=>h.clip_id===sel);if(hit){
+  ctx.save();ctx.strokeStyle='#fff';ctx.lineWidth=1.5;ctx.setLineDash([5,3]);ctx.strokeRect(hit.x-3,hit.y-3,hit.w+6,hit.h+6);ctx.setLineDash([]);
+  for(const [x,y] of [[hit.x+hit.w,hit.y+hit.h]]){ctx.fillStyle='#fff';ctx.fillRect(x-3,y-3,6,6);ctx.strokeStyle='#000';ctx.strokeRect(x-3,y-3,6,6);}ctx.restore();
+ }
+ for(const job of P.promptJobs||[]){if(!job.clip_id||Date.now()-(job.finishedAt||Date.now())>12000)continue;
+  const h=graphicHits.find(x=>x.clip_id===job.clip_id);if(!h)continue;
+  ctx.save();ctx.strokeStyle='#fff';ctx.lineWidth=1;ctx.setLineDash([3,3]);ctx.strokeRect(h.x-5,h.y-5,h.w+10,h.h+10);ctx.font='bold 10px Arial';ctx.fillStyle='#000';ctx.fillRect(h.x-5,h.y-17,65,13);ctx.fillStyle='#fff';ctx.fillText(job.cursor,h.x-2,h.y-16);ctx.restore();
+ }
+}
+function openGraphicInline(c,node){
+ if(graphicInline)graphicInline.finish(false);
+ const hit=graphicHits.find(h=>h.clip_id===c.id);if(!hit)return;
+ const cr=cv.getBoundingClientRect(),wr=$('#viewerWrap').getBoundingClientRect(),k=cr.width/cv.width;
+ const ta=el('textarea','textEditor');ta.value=node.text;ta.setAttribute('aria-label','Edit graphic text');
+ Object.assign(ta.style,{left:`${cr.left-wr.left+hit.x*k}px`,top:`${cr.top-wr.top+hit.y*k}px`,width:`${Math.max(100,hit.w*k+20)}px`,height:`${Math.max(50,hit.h*k+20)}px`,fontSize:`${Math.max(14,node.size*cv.height*k)}px`});
+ let closed=false;const finish=save=>{if(closed)return;closed=true;ta.remove();graphicInline=null;if(save&&ta.value!==node.text)commitGraphicChange(c,node,{text:ta.value});};
+ graphicInline={ta,finish};ta.onkeydown=e=>{e.stopPropagation();if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();finish(true);}if(e.key==='Escape'){e.preventDefault();finish(false);}};ta.onblur=()=>finish(true);$('#viewerWrap').append(ta);ta.focus();ta.select();
+}
+const canvasPoint=e=>{const r=cv.getBoundingClientRect();return {x:(e.clientX-r.left)/r.width*cv.width,y:(e.clientY-r.top)/r.height*cv.height};};
+const graphicAt=(x,y)=>[...graphicHits].reverse().find(h=>x>=h.x-4&&x<=h.x+h.w+4&&y>=h.y-4&&y<=h.y+h.h+4);
+cv.addEventListener('pointerdown',e=>{
+ if(!P||renderView||playing||e.button!==0)return;
+ const at=canvasPoint(e),selected=graphicHits.findLast(h=>h.clip_id===sel);
+ const corner=selected&&Math.hypot(at.x-selected.x-selected.w,at.y-selected.y-selected.h)<12;
+ if(!corner&&textHits.some(h=>at.x>=h.x&&at.x<=h.x+h.w&&at.y>=h.y&&at.y<=h.y+h.h))return;
+ const hit=corner?selected:graphicAt(at.x,at.y);if(!hit)return;
+ e.stopImmediatePropagation();e.preventDefault();select(hit.clip_id);
+ graphicDrag={hit,start:at,node:{...hit.node},mode:corner?'resize':'move',moved:false};cv.setPointerCapture(e.pointerId);
+},true);
+cv.addEventListener('pointermove',e=>{
+ const point=canvasPoint(e);
+ if(!graphicDrag){if(!playing&&graphicAt(point.x,point.y)){cv.style.cursor='grab';e.stopImmediatePropagation();}return;}
+ e.stopImmediatePropagation();const dx=point.x-graphicDrag.start.x,dy=point.y-graphicDrag.start.y;
+ if(Math.abs(dx)+Math.abs(dy)<2)return;
+ graphicDrag.moved=true;graphicDraft={clip_id:graphicDrag.hit.clip_id,node_id:graphicDrag.hit.node_id,patch:graphicTransform(graphicDrag.node,graphicDrag.hit,graphicDrag.mode,dx,dy,cv.width,cv.height)};
+},true);
+const finishGraphicDrag=(e,cancel=false)=>{
+ if(!graphicDrag)return;e.stopImmediatePropagation();const drag=graphicDrag,draft=graphicDraft;graphicDrag=null;graphicDraft=null;
+ if(!cancel&&drag.moved&&draft){const c=P.clips.find(c=>c.id===drag.hit.clip_id);commitGraphicChange(c,drag.node,draft.patch);}
+};
+cv.addEventListener('pointerup',e=>finishGraphicDrag(e),true);cv.addEventListener('pointercancel',e=>finishGraphicDrag(e,true),true);
+cv.addEventListener('dblclick',e=>{const p=canvasPoint(e),h=graphicAt(p.x,p.y);if(h?.node.kind!=='text')return;e.stopImmediatePropagation();e.preventDefault();const c=P.clips.find(c=>c.id===h.clip_id);select(c.id);openGraphicInline(c,h.node);},true);
+canvasTools.addEventListener('focusout',()=>queueMicrotask(()=>{renderCanvasTools();processPromptJobs(P?.promptJobs||[]);}));
+
+// Independent prompt cursors. Routing overlaps; actual control commits are short UI turns.
+const promptClientId=crypto.randomUUID(),promptInProgress=new Set();
+const isAutomationCheck = new URLSearchParams(location.search).has('automation_check');let canvasExecution=Promise.resolve();
+const livePrompts=el('div','livePrompts');livePrompts.id='livePrompts';$('#feed').before(livePrompts);
+composer.placeholder='Describe a canvas change… Send another prompt while this one runs.';
+function promptCursor(job,target){
+ let r=roleCursors.get(job.cursor);if(!r){const cur=$('#cursor').cloneNode(true);cur.removeAttribute('id');cur.classList.add('editCursor','promptCursor');document.body.append(cur);r={cur,timer:null};roleCursors.set(job.cursor,r);}
+ const box=target.getBoundingClientRect();r.cur.querySelector('span').textContent=`${job.cursor} · ${job.phase}`;r.cur.style.opacity=1;r.cur.style.transform=`translate3d(${clamp(box.left+Math.min(box.width/2,30),0,Math.max(0,innerWidth-185))}px,${clamp(box.top+Math.min(box.height/2,18),0,innerHeight-30)}px,0)`;clearTimeout(r.timer);r.timer=setTimeout(()=>r.cur.style.opacity=0,8000);
+}
+const seenPromptPhases = new Map();
+function aimAtGraphic(job) {
+ const hit = graphicHits.find(h => h.clip_id === job.clip_id);
+ if (!hit) return;
+ const box = cv.getBoundingClientRect();
+ const anchorY = hit.node.kind === 'rect' ? hit.y + hit.h * .65 : hit.y;
+ promptCursor(job, { getBoundingClientRect: () => ({
+  left: box.left + hit.x * box.width / cv.width,
+  top: box.top + anchorY * box.height / cv.height,
+  width: hit.w * box.width / cv.width,
+  height: 0
+ }) });
+}
+function preparePromptControl(job) {
+ if (renderView) showRender(null);
+ if (playing) togglePlay();
+ if (Math.abs(T - job.previewTime) > .001) seek(job.previewTime);
+ graphicNodeId = job.node_id;
+ if (sel !== job.clip_id) select(job.clip_id);
+ tick();
+ renderCanvasTools();
+}
+function processPromptJobs(jobs){
+ const sorted = [...jobs].sort((a,b) => b.number - a.number);
+ const active = sorted.filter(j => ['routing','ready','executing'].includes(j.status));
+ const listed = [...active, ...sorted.filter(j => !active.includes(j)).slice(0, Math.max(0, 5-active.length))];
+ livePrompts.replaceChildren();
+ const latest = new Map();
+ for (const job of sorted) if (!latest.has(job.cursor)) latest.set(job.cursor, job.id);
+ for (const job of listed) {
+  const row = el('div','promptRow');
+  row.dataset.prompt = job.id;
+  row.append(el('b','',esc(job.cursor)),el('span','',esc(job.phase)));
+  if (job.revision_id) {
+   const review = el('button','','Review');
+   review.onclick = () => openRevision(job.revision_id);
+   row.append(review);
+  }
+  livePrompts.append(row);
+  const phase = job.id + ':' + job.status;
+  if (latest.get(job.cursor) === job.id && seenPromptPhases.get(job.cursor) !== phase) {
+   seenPromptPhases.set(job.cursor, phase);
+   if (['routing','ready'].includes(job.status) && !roleCursors.has(job.cursor)) promptCursor(job,row);
+   if (job.status === 'executing' && $('#follow').checked && !playing && !graphicDrag && !graphicInline && !canvasTools.contains(document.activeElement)) {
+    preparePromptControl(job);
+    const control = canvasTools.querySelector(`[data-control="${job.route.property}"]`);
+    if (control) promptCursor({...job,phase:`${job.element} · ${job.control}`}, control);
+   }
+   if (job.status === 'done' && Date.now() - job.finishedAt < 8000) aimAtGraphic(job);
+  }
+  if(job.status==='ready'&&!promptInProgress.has(job.id)&&(document.visibilityState==='visible'||isAutomationCheck)){
+   promptInProgress.add(job.id);canvasExecution=canvasExecution.then(()=>executeCanvasPrompt(job)).catch(e=>post({action:'prompt_fail',id:job.id,message:e.message}));
+  }
+ }
+}
+async function executeCanvasPrompt(job){
+ while(canvasTools.contains(document.activeElement)||graphicInline){await new Promise(resolve=>document.addEventListener('focusout',resolve,{once:true}));}
+ const claim=await post({action:'claim_prompt',id:job.id,client:promptClientId});if(!claim.ok)return;
+ preparePromptControl(job);
+ const property=job.route.property;
+ let input=canvasTools.querySelector(`[data-control="${property}"]`);
+ if(property==='opacity'){
+  const wrap=el('label','canvasField');wrap.append(el('span','','Opacity'));input=el('input');input.type='number';input.value=job.before;input.dataset.control='opacity';input.onchange=()=>post({action:'ops',surface:'canvas',ops:[{op:'update_clip',id:job.clip_id,opacity:rounded(Number(input.value))}]});wrap.append(input);canvasTools.append(wrap);
+ }
+ if(!input)throw new Error(`The selected canvas object has no ${job.control} control.`);
+ input.classList.add('promptControl');promptCursor({...job,phase:`Select ${job.element} → ${job.control}`},input);
+ if (document.visibilityState === 'visible') await new Promise(resolve => { requestAnimationFrame(resolve); setTimeout(resolve, 45); });
+ const token={id:job.id,client:promptClientId};activePromptControl=token;
+ try{input.value=input.dataset.unit==='percent'?rounded(job.after*100):String(job.after);input.dispatchEvent(new Event('change',{bubbles:true}));}finally{activePromptControl=null;}
+ if(!token.completion)throw new Error('The canvas control did not submit an edit.');
+ const result=await token.completion;if(result.error)throw new Error(result.error);
+ setTimeout(()=>input.classList.remove('promptControl'),250);
+}
+document.addEventListener('visibilitychange',()=>processPromptJobs(P?.promptJobs||[]));

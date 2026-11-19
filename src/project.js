@@ -1,5 +1,6 @@
 // The timeline model and every operation that can change it.
 // Claude (via MCP) and the human (via the UI) both go through applyOp, so the timeline has one source of truth.
+import { validateMove, moveAt } from '../ui/clip-move.js';
 import { uid, round, clamp, tc } from './util.js';
 import { findPauses } from './media.js';
 import { EFFECTS, effectParams } from '../ui/effects.js';
@@ -41,7 +42,7 @@ const CLIP_PROPS = ['start', 'in', 'out', 'track', 'speed', 'volume', 'muted', '
 const TEXT_DEFAULT = { content: '', size: 0.055, color: '#ffffff', stroke: '#000000', strokeWidth: 0.14, bg: null, weight: 800, x: 0.5, y: 0.72, maxWidth: 0.84, uppercase: false, font: 'Helvetica Neue, Helvetica, Arial, sans-serif' };
 const TEXT_KEYS = Object.keys(TEXT_DEFAULT);
 // Everything update_clip can change. Anything else is rejected instead of silently ignored, so a "✓" always means it happened.
-const UPDATE_KEYS = [...CLIP_PROPS, 'duration', 'grade', 'key', 'text', 'style', 'params', 'source'];
+const UPDATE_KEYS = [...CLIP_PROPS, 'duration', 'grade', 'key', 'text', 'style', 'params', 'source', 'move'];
 const OP_META = ['op', 'id', 'why', 'agent', 'ripple'];
 
 function setProps(p, c, a) {
@@ -57,6 +58,10 @@ function setProps(p, c, a) {
     if (a.source) c.source = a.source;
     if (!/^V\d+$/.test(c.source)) throw new Error(`An effect reads a video track (V1, V2…), not "${c.source}".`);
     if (c.source === (a.track || c.track)) throw new Error(`An effect cannot sit on the track it reads (${c.source}). Put it on a track above, e.g. V${Number(c.source.slice(1)) + 1}.`);
+  }
+  if (a.move !== undefined) { // keyframed position (ui/clip-move.js): footage and stills only
+    if (a.move && !['video', 'image'].includes(c.kind)) throw new Error(`move applies to video and image clips, not ${c.kind}. Nothing was changed.`);
+    const m = validateMove(a.move); if (m) c.move = m; else delete c.move;
   }
   if (a.grade !== undefined) c.grade = a.grade ? { ...(c.grade || {}), ...a.grade } : undefined;
   if (a.key !== undefined) c.key = a.key ? { color: '#00ff00', similarity: 0.3, blend: 0.08, ...(c.key || {}), ...a.key } : undefined;
@@ -102,6 +107,7 @@ function splitAt(p, c, t) {
   const src = round(c.in + (t - c.start) * (c.speed || 1));
   const b = JSON.parse(JSON.stringify(c));
   b.id = uid('c_'); b.start = round(t); b.in = src; delete b.fadeIn;
+  if (c.move) { const d = t - c.start, at0 = moveAt(c, d); b.move = [{ t: 0, x: at0.x, y: at0.y }, ...c.move.filter((f) => f.t > d).map((f) => ({ ...f, t: round(f.t - d) }))]; } // the right half keeps moving from where it was
   c.out = src; delete c.fadeOut;
   p.clips.push(b);
   return b;
@@ -216,9 +222,19 @@ export function applyOp(p, a, ctx = {}) {
       p.clips.push(c);
       return { text: `Text ${label(p, c)} on ${c.track} at ${tc(c.start)} for ${round(dur(c), 2)}s`, clipIds: [c.id], t: c.start };
     }
+    case 'patch_graphic': {
+      const c = getClip(p, a.id);
+      if (c.effect?.type !== 'live_graphic') throw new Error('Select a live graphic layer first.');
+      if (!a.patch || typeof a.patch !== 'object' || Array.isArray(a.patch)) throw new Error('patch must be an object.');
+      if (Object.keys(a.patch).some(k => ['id','kind'].includes(k))) throw new Error('Node identity and kind cannot be patched.');
+      const nodes = c.effect.params.nodes.map(n => n.id === a.node_id ? { ...n, ...a.patch } : n);
+      if (!nodes.some(n => n.id === a.node_id)) throw new Error(`No graphic node "${a.node_id}".`);
+      c.effect.params = effectParams('live_graphic', { nodes }, c.effect.params);
+      return { text: `Revised graphic ${a.node_id}: ${Object.keys(a.patch).join(', ')} (live; no encoding)`, clipIds: [c.id], t: Math.max(c.start, c.start + (nodes.find(n=>n.id===a.node_id).at || 0)) };
+    }
     case 'add_effect': {
       const type = a.effect || a.type;
-      if (!EFFECTS[type]) throw new Error(`add_effect needs effect: one of ${Object.keys(EFFECTS).join(', ')}. frame_effects lists what each does and its settings.`);
+      if (!EFFECTS[type] || EFFECTS[type].hidden) throw new Error(`add_effect needs effect: one of ${Object.keys(EFFECTS).join(', ')}. frame_effects lists what each does and its settings.`);
       if (a.start == null) throw new Error('add_effect needs start (timeline seconds).');
       const fps = p.fps || 30, snap = (t) => Math.round(Number(t) * fps) / fps; // effects sit on whole frames, so every frame of the effect lines up with a frame of the footage
       const track = a.track || 'V2'; ensureTrack(p, track);
@@ -471,6 +487,11 @@ export function applyOp(p, a, ctx = {}) {
     case 'delete_marker': {
       p.markers = p.markers.filter((m) => m.id !== a.id);
       return { text: 'Marker removed', clipIds: [], t: null };
+    }
+    case 'name_track': {
+      if (typeof a.name !== 'string' || !a.name.trim() || a.name.length > 64) throw new Error('Track name must be 1–64 characters.');
+      ensureTrack(p, a.track); p.trackLabels ||= {}; p.trackLabels[a.track] = a.name.trim();
+      return { text: `${a.track}: ${p.trackLabels[a.track]}`, clipIds: [], t: null };
     }
     case 'set_project': {
       if (a.name) p.name = a.name;
