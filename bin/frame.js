@@ -18,6 +18,14 @@ if (cmd === 'serve') {
   // exitCode, not process.exit(): on Windows, exiting while fetch's socket is still closing aborts Node
   // ("Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)") and the shell sees a failure.
   process.exitCode = r.isError ? 1 : 0;
+} else if (cmd === 'speedrun') {
+  // frame speedrun <file> [--name "..."] [--model base.en] [--no-render]
+  const opt = (k) => { const i = rest.indexOf(k); return i >= 0 ? rest[i + 1] : undefined; };
+  const file = rest.find((a, i) => !a.startsWith('--') && !['--name', '--model'].includes(rest[i - 1]));
+  if (!file) { console.log('Usage: frame speedrun <video file> [--name "Project name"] [--model <whisper model>, forces Whisper] [--no-render]'); process.exit(1); }
+  const { speedrun } = await import('../src/speedrun.js');
+  try { await speedrun(file, { name: opt('--name'), model: opt('--model'), render: !rest.includes('--no-render') }); }
+  catch (e) { console.error(`Speed run stopped: ${e.message}`); process.exitCode = 1; }
 } else if (cmd === 'open') {
   const { ensureDaemon } = await import('../src/mcp.js');
   await ensureDaemon();
@@ -54,6 +62,7 @@ if (cmd === 'serve') {
   frame open      open the Frame window
   frame doctor    check ffmpeg / whisper / chrome / cutout / service
   frame call <tool> '<json>'   call a tool from the shell
+  frame speedrun <file>        raw clip → cut, vertical crop, punch-ins, captions, render (live in the window)
   frame serve     run the local service in the foreground
   frame stop      stop the local service`);
 }
