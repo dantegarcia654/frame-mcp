@@ -10,13 +10,27 @@ Use a pull request in `dantegarcia654/frame-mcp` for each reviewable change. Cod
 
 GitHub event-triggered automation **FRAME PR review alerts** is enabled for this repository as of November 19, 2026. It handles PR opening/ready events, commit updates, reviews, and comments. It notifies Dante in ChatGPT and reviews ready submissions, posts feedback/questions, and considers developer responses. Drafts get an alert/brief until ready. No hourly polling schedule is used. Delivery latency and a full round trip have not yet been verified. Manual prompts remain available: **"review FRAME uploads"**, **"review FRAME PR #N"**, or **"read Claude's response on PR #N and make the final call."** Telegram is optional.
 
+## What stays out of this public repository
+
+This repository is public. Anything posted here, including PR text, review comments and attachments, can be read and indexed by anyone. Do not post product plans and ideas that are not built yet, business or pricing plans, partner, customer or test-user names, unreleased footage, or anything a partner shared in confidence. Code, its evidence on shareable test footage, and reviews of that code can stay here.
+
+That discussion needs a private home. Options, for Dante and gumballchief to pick:
+
+| Option | What changes | Status |
+| --- | --- | --- |
+| A. Make `frame-mcp` private until release | The same loop, private; flip it public at launch | Conditional: after the switch, verify that the ChatGPT connector and the developer's GitHub login still read and write it and that the review automation still fires, with one test round trip |
+| B. Keep the code public, add a private companion repo for plans and design discussion | Code PRs stay here; plans and design debates go in the private repo, referenced from PRs only by name | Conditional: both human accounts added; the ChatGPT connector and the developer's GitHub login granted access to the new repo; the review automation's event subscription extended to it; then one test round trip |
+| C. A Telegram or Discord channel | A relay posts PR links and review summaries; each agent reads and replies there | Not built: bots cannot receive other bots' messages through Telegram's standard Bot API, so this needs an explicit relay design; Discord connectivity is unverified |
+
+The reviewer recommends B (initial review on #15); gumballchief leaned toward C. Until a channel is chosen and its round trip tested, gumballchief's Claude posts only code and process here and keeps plans off GitHub.
+
 ## Submit enough context, in any useful format
 
 The PR template is a convenience, not a prescribed development process. Supply the user problem, the resulting behavior, design reasoning, and enough evidence to assess the change.
 
 For code, identify the PR head commit. For screenshots, recordings, exported videos, and test results, say which commit produced them and what they demonstrate. Include reproduction steps and known limitations. A short recording can show interaction; an exported MP4 can show output; neither substitutes for the other.
 
-This repository is public. Use shareable test footage for public attachments. Evidence may instead be attached directly in Dante's ChatGPT conversation; record its filename and associated PR/commit so review does not confuse versions. Local paths on someone else's computer cannot be inspected from ChatGPT.
+This repository is public (see the section above for what stays out of it). Use shareable test footage for public attachments. Evidence may instead be attached directly in Dante's ChatGPT conversation; record its filename and associated PR/commit so review does not confuse versions. Local paths on someone else's computer cannot be inspected from ChatGPT.
 
 If an attachment cannot be opened, provide an accessible copy or a reproducible alternative. The reviewer must record **not inspected**, rather than infer its contents from a filename, thumbnail, caption, or inaccessible link. Do not require a particular evidence format where another form proves the same behavior.
 
