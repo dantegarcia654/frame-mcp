@@ -1074,6 +1074,15 @@ const seenPromptPhases = new Map();
 function aimAtGraphic(job) {
  const hit = graphicHits.find(h => h.clip_id === job.clip_id);
  if (!hit) return;
+ // The canvas outline and prompt row already show the result. Keep the changed wording readable.
+ if (hit.node.kind === 'text') {
+  const cursor = roleCursors.get(job.cursor);
+  if (cursor) {
+   clearTimeout(cursor.timer);
+   cursor.cur.style.opacity = 0;
+  }
+  return;
+ }
  const box = cv.getBoundingClientRect();
  const anchorY = hit.node.kind === 'rect' ? hit.y + hit.h * .65 : hit.y;
  promptCursor(job, { getBoundingClientRect: () => ({
