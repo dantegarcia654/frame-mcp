@@ -977,19 +977,19 @@ const handlers = {
     const g = buildGraph(pv, { rasters: p.rasters, effects: fx.drawn, assetPath: assetPath(p), scale: quality === 'draft' ? 0.5 : 1, loudnorm: a.loudnorm !== false });
     const r = { id: 'r' + n, status: 'rendering', progress: 0, file, quality, startedAt: Date.now(), timelineVersion: p.version };
     p.renders.push(r); p.status = { state: 'rendering', label: 'Rendering' };
-    feed(p, { kind: 'render', text: `Rendering ${quality} MP4 · ${round(D, 2)}s · ${g.inputs.length} inputs through ffmpeg`, why: a.why, renderId: r.id }); emit(p);
+    feed(p, { actor: 'frame', kind: 'render', text: `Rendering ${quality} MP4 · ${round(D, 2)}s · ${g.inputs.length} inputs through ffmpeg`, why: a.why, renderId: r.id }); emit(p);
     let lastEmit = 0;
     try {
       await runFfmpeg(ffmpegArgs(g, file, { quality }), D, (pr) => { r.progress = pr; if (Date.now() - lastEmit > 300) { lastEmit = Date.now(); emit(p); } });
       const info = await media.probe(file); const loud = await media.loudness(file);
       Object.assign(r, { status: 'done', progress: 1, endedAt: Date.now(), duration: info.duration, width: info.width, height: info.height, bytes: fs.statSync(file).size, loudness: loud });
       p.status = { state: 'done', label: 'Render complete' };
-      feed(p, { kind: 'render', text: `Render complete · ${info.width}×${info.height} · ${info.duration}s · ${(r.bytes / 1e6).toFixed(1)} MB${loud ? ` · ${loud.lufs} LUFS` : ''} · took ${round((r.endedAt - r.startedAt) / 1000, 1)}s`, renderId: r.id, done: true });
+      feed(p, { actor: 'frame', kind: 'render', text: `Render complete · ${info.width}×${info.height} · ${info.duration}s · ${(r.bytes / 1e6).toFixed(1)} MB${loud ? ` · ${loud.lufs} LUFS` : ''} · took ${round((r.endedAt - r.startedAt) / 1000, 1)}s`, renderId: r.id, done: true });
       emit(p, { rendered: r.id });
       return [text(`Rendered: ${file}\nMeasured: ${info.width}×${info.height}, ${info.duration}s, ${(r.bytes / 1e6).toFixed(1)} MB${loud ? `, ${loud.lufs} LUFS integrated, true peak ${loud.true_peak_db} dBFS` : ''}.${fx.count ? `\nDrew ${fx.count} new effect frame(s) with ui/effects.js in headless Chrome.` : ''}${[...g.warnings, ...cutoffLines(speechCutoffs(p, loadEnv(p)), tc), ...deadAirLines(deadAir(p, loadEnv(p)), tc), ...(missing.length ? [`${missing.length} text clip(s) left out of this render on request (allow_missing_text): ${reason}`] : []), ...fx.problems].map((w) => '\n⚠ ' + w).join('')}\nThe user can play it in the Frame window. Use frame_view to check frames yourself.`)];
     } catch (e) {
       Object.assign(r, { status: 'failed', error: e.message }); p.status = { state: 'idle', label: 'Render failed' };
-      feed(p, { kind: 'render', text: 'Render failed: ' + e.message.slice(-300), renderId: r.id }); emit(p);
+      feed(p, { actor: 'frame', kind: 'render', text: 'Render failed: ' + e.message.slice(-300), renderId: r.id }); emit(p);
       throw e;
     }
   },

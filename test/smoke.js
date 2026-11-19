@@ -317,6 +317,19 @@ try {
     r = await call('frame_swarm', { action: 'direct', picks: [{ slot: 'one', asset: 'a2', start: 3, why: 'test pick' }, { slot: 'nope', asset: 'a1', start: 0 }] });
     ok('direct applies the Director pick and names the bad one', /1\. ✓ .*a2 00:03\.00/.test(r.text) && /no slot "nope"/.test(r.text), r.text.split('\n')[0].slice(0, 160));
   }
+  {
+    await call('frame_start', { name: 'Local title prompt' });
+    await call('frame_edit', { ops: [{ op: 'add_effect', effect: 'live_graphic', label: 'Main title', start: 1, duration: 2,
+      params: { nodes: [{ id: 'main-title', kind: 'text', x: .5, y: .5, text: 'First look' }] } }] });
+    const callsBefore = decideSeen.length;
+    r = await call('frame_prompt', { prompt: 'Change the Main title to "Take two".', playhead: 2 });
+    const jobId = JSON.parse(r.content[0].text).job_id;
+    r = await call('frame_prompt_jobs');
+    const job = JSON.parse(r.content[0].text).find(j => j.id === jobId);
+    ok('the local title prompt routes one text edit without a model request', job?.status === 'ready'
+      && job.route.provider === 'local-title' && job.before === 'First look' && job.after === 'Take two'
+      && decideSeen.length === callsBefore);
+  }
 } finally {
   decideMock.close();
   daemon.kill(); fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); // the daemon may still be finishing a write

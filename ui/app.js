@@ -114,9 +114,9 @@ function renderStatus() {
   if (P.paused) return setStatus('hold', 'Paused by you');
   if (r && r.status === 'rendering') return setStatus('live', `Rendering ${Math.round((r.progress || 0) * 100)}%`);
   if (P.status.state === 'waiting') return setStatus('hold', 'Claude is waiting for you');
-  if (ago < 6) return setStatus('live', 'Claude is editing');
-  if (ago < 180) return setStatus('warm', `Claude active · last action ${Math.round(ago)}s ago`);
-  setStatus(activeJobs.length?'busy':'', activeJobs.length?`${activeJobs.length} prompts running`:'Canvas ready');
+  if (activeJobs.length) return setStatus('busy', `${activeJobs.length} prompts running`);
+  if (ago < 180) return setStatus('warm', `Last tool call ${Math.round(ago)}s ago`);
+  setStatus('', 'Canvas ready');
 }
 setInterval(renderStatus, 1000);
 
