@@ -329,6 +329,18 @@ try {
     ok('the local title prompt routes one text edit without a model request', job?.status === 'ready'
       && job.route.provider === 'local-title' && job.before === 'First look' && job.after === 'Take two'
       && decideSeen.length === callsBefore);
+    const state = await call('frame_state');
+    const project_id = state.text.match(/\((p_\w+)\)/)?.[1];
+    const args = { project_id, label: 'Main title' };
+    const bad = await call('frame_revise_title', { ...args, patch: { text: 'Reject this', size: 9 } });
+    ok('a failed title revision leaves the title unchanged', bad.isError
+      && projOf(project_id).clips[0].effect.params.nodes[0].text === 'First look');
+    const revised = await call('frame_revise_title', { ...args, patch: { text: 'Take two', color: '#ff536b' } });
+    const result = JSON.parse(revised.content[0].text);
+    const saved = projOf(project_id);
+    ok('one live title tool call persists a scoped revision', result.status === 'applied'
+      && saved.revisions.at(-1)?.id === result.revision_id && saved.revisions.at(-1)?.components.length === 1
+      && saved.clips[0].effect.params.nodes[0].text === 'Take two');
   }
 } finally {
   decideMock.close();

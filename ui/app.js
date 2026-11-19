@@ -81,6 +81,10 @@ function onProjectDelta(m) {
   if (m.feedEntries?.length) {
     P.feed = [...P.feed, ...m.feedEntries].slice(-800);
     renderFeed();
+    for (const entry of m.feedEntries.filter(e => e.op === 'frame_revise_title' && e.phase === 'applied')) {
+      const clip = $('#rows').querySelector(`[data-id="${entry.clipIds[0]}"]`) || $('#rows').querySelector('[data-group="graphics"]');
+      clip?.animate([{ boxShadow: 'inset 0 0 0 2px white' }, { boxShadow: 'inset 0 0 0 2px transparent' }], 900);
+    }
   }
   for (const f of m.focuses || []) focus(f);
   if (m.clips?.length) {
@@ -861,7 +865,24 @@ function drawEffectClip(c) {
 function tick() {
   if (!P || renderView) return;
   sizeViewer();
-  if (playing) { T = playT0 + (performance.now() - playW0) / 1000; if (T >= P.duration) { T = P.duration; playing = false; $('#play').textContent = '▶'; } placePlayhead(); const sc = $('#scroll'), x = T * pps; if (!autoFit && x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - 60; }
+  if (playing) {
+    const now = performance.now();
+    T = playT0 + (now - playW0) / 1000;
+    if (T >= P.duration) {
+      if ($('#loop').checked && P.duration > 0) {
+        T %= P.duration;
+        playT0 = T;
+        playW0 = now;
+      } else {
+        T = P.duration;
+        playing = false;
+        $('#play').textContent = '▶';
+      }
+    }
+    placePlayhead();
+    const sc = $('#scroll'), x = T * pps;
+    if (!autoFit && x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - 60;
+  }
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
   graphicHits=[];textHits = []; selHit = null; fxApprox = false;
   for (const s of slots.values()) s.used = false;

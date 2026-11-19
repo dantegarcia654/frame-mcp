@@ -20,6 +20,7 @@ import { TEMPLATES, DIRECTOR_RULES, SWARM, resolveTemplate, cast, windowsFor, be
 import { decisionsConfig, PACKS, MODEL, THRESHOLD, MAX_SECONDS, makeDecisionProxy, proxyCommand, ask, normaliseQuestions, answerText, sheetLine, sheetSummary, ranked } from './decide.js';
 import { drawTextsHeadless } from './text.js';
 import { textKey } from '../ui/text-draw.js';
+import { validateNodes } from '../ui/live-graphics.js';
 import { speechCutoffs, cutoffLines, deadAir, deadAirLines } from './speechcheck.js';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui');
@@ -35,10 +36,10 @@ let lastCallAt = 0;
 const pdir = (id) => mkdirp(path.join(HOME, 'projects', id));
 const cacheFile = (p, name) => path.join(mkdirp(path.join(pdir(p.id), 'cache')), name);
 // Atomic: write a temp file, then rename over project.json. A full disk then fails the save, never empties the project.
-function save(p) {
+function save(p, { strict = false } = {}) {
   p.updatedAt = Date.now(); const f = path.join(pdir(p.id), 'project.json'), tmp = `${f}.${process.pid}.tmp`;
   try { fs.writeFileSync(tmp, JSON.stringify(p)); fs.renameSync(tmp, f); }
-  catch (e) { try { fs.rmSync(tmp, { force: true }); } catch {} console.error(`Frame could not save ${p.id}: ${e.message}`); p.saveError = e.code || e.message; }
+  catch (e) { try { fs.rmSync(tmp, { force: true }); } catch {} console.error(`Frame could not save ${p.id}: ${e.message}`); p.saveError = e.code || e.message; if (strict) throw e; }
 }
 function load(id) {
   if (projects.has(id)) return projects.get(id);
@@ -123,9 +124,9 @@ function sendProjectDelta(p, delta) {
   for (const c of clients) c.write(msg);
 }
 
-function emitClipChanges(p, ids, feedEntries, revisions, focuses = []) {
+function emitClipChanges(p, ids, feedEntries, revisions, focuses = [], options) {
   p.version++;
-  save(p);
+  save(p, options);
   sendProjectDelta(p, {
     version: p.version, clips: p.clips.filter(c => ids.has(c.id)),
     feedEntries, revisions, focuses, promptJobs: p.promptJobs
@@ -703,6 +704,63 @@ const handlers = {
 
   async frame_prompt(a) { const p=current(a.project_id);if(p.paused)throw new Error('Frame is paused. Resume before starting a prompt.');const job=promptRunner.queue(p,a);return [text(JSON.stringify({job_id:job.id,cursor:job.cursor,status:job.status}))]; },
   async frame_prompt_jobs(a) {const p=current(a.project_id);return [text(JSON.stringify(p.promptJobs||[]))];},
+  async frame_revise_title(a) {
+    if (!a.project_id || a.project_id !== currentId) throw new Error('Open the requested project in the Frame window before revising its title.');
+    const p = current(a.project_id);
+    const executionId = uid('tool_');
+    const startedAt = Date.now();
+    const activity = (phase, message, extra, project = p) => feed(project, {
+      actor: 'frame', kind: 'op', op: 'frame_revise_title', executionId, phase, text: message, ...extra,
+    });
+    sendProjectDelta(p, { feedEntries: [activity('started', 'Title revision started')] });
+    try {
+      if (p.paused) throw new Error('Frame editing is paused. Resume editing in the Frame window.');
+      const matches = p.clips.filter(c => c.label === a.label && c.effect?.type === 'live_graphic'
+        && c.effect.params.nodes.length === 1 && c.effect.params.nodes[0].kind === 'text');
+      if (matches.length !== 1) throw new Error('Give the exact label of one single-node live title in the active project.');
+      const [clip] = matches;
+      const [node] = clip.effect.params.nodes;
+      const patch = a.patch;
+      const keys = patch && typeof patch === 'object' && !Array.isArray(patch) ? Object.keys(patch) : [];
+      if (!keys.length || keys.some(k => !['text', 'color', 'size', 'x', 'y', 'weight', 'font'].includes(k))) {
+        throw new Error('Provide one or more supported fields: text, color, size, x, y, weight, font.');
+      }
+      const valid = {
+        text: typeof patch.text === 'string' && patch.text.trim().length > 0 && patch.text.length <= 160,
+        color: typeof patch.color === 'string' && /^#[0-9a-f]{6}$/i.test(patch.color),
+        size: Number.isFinite(patch.size) && patch.size >= 0.02 && patch.size <= 0.3,
+        x: Number.isFinite(patch.x) && patch.x >= 0 && patch.x <= 1,
+        y: Number.isFinite(patch.y) && patch.y >= 0 && patch.y <= 1,
+        weight: [400, 500, 600, 700, 800].includes(patch.weight),
+        font: ['sans', 'serif', 'mono'].includes(patch.font),
+      };
+      if (keys.some(k => !valid[k])) throw new Error('A title field is outside its supported range or format.');
+      validateNodes([{ ...node, ...patch }]);
+      const changed = keys.filter(k => node[k] !== patch[k]);
+      if (!changed.length) {
+        const entry = activity('unchanged', `“${clip.label}” already has the requested values`);
+        emitClipChanges(p, new Set(), [entry], []);
+        return [text(JSON.stringify({ execution_id: executionId, status: 'unchanged', started_at: startedAt }))];
+      }
+      const op = { op: 'patch_graphic', id: clip.id, node_id: node.id, patch };
+      // Stage the one changed clip so a failed disk write leaves playback and undo history intact.
+      const next = { ...p, clips: p.clips.map(c => c === clip ? structuredClone(c) : c),
+        revisions: [...(p.revisions || [])], feed: [...p.feed] };
+      const result = applyRevision(next, op, {}, { type: 'agent', name: 'Tool caller', method: 'FRAME title tool' });
+      const entry = activity('applied', `Applied and saved “${clip.label}” · ${changed.join(', ')}`, {
+        revisionId: result.revision.id, clipIds: [clip.id],
+      }, next);
+      emitClipChanges(next, new Set([clip.id]), [entry], [result.revision], [], { strict: true });
+      snapshot(p);
+      Object.assign(p, next);
+      return [text(JSON.stringify({ execution_id: executionId, status: 'applied', project_id: p.id,
+        revision_id: result.revision.id, changed, started_at: startedAt, applied_at: entry.ts }))];
+    } catch (e) {
+      const entry = activity('failed', `Title revision failed · ${e.message}`);
+      emitClipChanges(p, new Set(), [entry], []);
+      throw e;
+    }
+  },
   async frame_revisions(a) {
     const p=current(a.project_id);
     if(a.action==='revert'){const rs=revertRevision(p,a.revision_id,{loadEnv:loadEnv(p),beforeApply:()=>snapshot(p)},{type:'agent',name:a.agent||'Agent'});for(const r of rs)feed(p,{kind:'op',op:'revert_revision',revisionId:r.revision?.id,text:r.text,clipIds:r.clipIds,t:r.t,agent:a.agent});emit(p);return [text('Revision reverted through the shared editor.')];}

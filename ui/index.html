@@ -52,6 +52,7 @@
       </div>
       <div id="transport">
         <button id="play" title="Play / pause (Space)">▶</button>
+        <label class="chk" title="Repeat the timeline from the beginning when it ends"><input type="checkbox" id="loop"> Repeat</label>
         <span id="tc">00:00.00</span><span class="dim">/</span><span id="dur" class="dim">00:00.00</span>
         <div class="grow"></div>
         <button id="backToTimeline" hidden>← Back to timeline</button>
@@ -60,7 +61,7 @@
     </section>
 
     <aside id="right">
-      <h3>Claude <span class="dim" id="feedHint">decisions, live</span></h3>
+      <h3>Activity <span class="dim" id="feedHint">timeline and tool calls</span></h3>
       <div id="feed"></div>
       <form id="composer">
         <textarea rows="2" placeholder="Tell Claude what to change…  (Enter to send)"></textarea>
