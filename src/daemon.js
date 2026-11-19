@@ -28,6 +28,8 @@ const promptRunner = createPromptRunner({ publish: (p) => emitPromptUpdate(p) })
 const projects = new Map();
 const history = new Map();
 const clients = new Set();
+const liveClients = new Set(); // windows showing the Frame Live panel (/live)
+const liveLog = [];          // Frame Live events of the current run, pushed by Claude Code hooks (cleared on each new prompt)
 let currentId = null;
 let lastCallAt = 0;
 
@@ -1100,7 +1102,16 @@ export function startDaemon() {
       const url = new URL(req.url, BASE); const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
       if (req.method === 'GET') {
         if (url.pathname === '/') return sendFile(req, res, path.join(UI_DIR, 'index.html'));
-        if (['app.js', 'text-draw.js', 'effects.js', 'live-graphics.js', 'timeline-groups.js', 'revision-controls.js', 'canvas-geometry.js', 'clip-move.js', 'official-brand-assets.js', 'fx-render.html', 'style.css', 'favicon.svg'].includes(parts[0]) && parts.length === 1) return sendFile(req, res, path.join(UI_DIR, parts[0]));
+        if (['app.js', 'text-draw.js', 'effects.js', 'live-graphics.js', 'timeline-groups.js', 'revision-controls.js', 'canvas-geometry.js', 'clip-move.js', 'official-brand-assets.js', 'fx-render.html', 'style.css', 'favicon.svg', 'live.js'].includes(parts[0]) && parts.length === 1) return sendFile(req, res, path.join(UI_DIR, parts[0]));
+        // Frame Live: what Claude is doing right now, pushed by Claude Code hooks (bin/live-hook.js).
+        if (url.pathname === '/live') return sendFile(req, res, path.join(UI_DIR, 'live.html'));
+        if (url.pathname === '/api/live') return json(res, { events: liveLog, windows: clients.size + liveClients.size });
+        if (url.pathname === '/api/live/events') {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+          liveClients.add(res); req.on('close', () => liveClients.delete(res));
+          res.write(`data: ${JSON.stringify({ type: 'backlog', events: liveLog })}\n\n`);
+          return;
+        }
         if ((parts[0] === 'fxin' || (parts[0] === 'api' && parts[1] === 'fxjob')) && await handleJobRequest(req, res, parts, body)) return;
         if (url.pathname === '/api/ping') return json(res, { name: 'frame', version: VERSION, pid: process.pid, clients: clients.size });
         if (url.pathname === '/api/packs') return json(res, { packs: packs.listPacks() });
@@ -1133,6 +1144,14 @@ export function startDaemon() {
         if (url.pathname === '/api/call') { const b = JSON.parse(await body(req)); return json(res, await callTool(b.name, b.arguments || {})); }
         if (url.pathname === '/api/ui') return json(res, await uiAction(JSON.parse(await body(req))));
         if (url.pathname === '/api/generating') return json(res, { ok: true, job: genUpdate(JSON.parse(await body(req, 1e5))) });
+        if (url.pathname === '/api/live') {
+          const ev = { ...JSON.parse(await body(req, 64e3)), at: Date.now() };
+          if (ev.kind === 'prompt') liveLog.length = 0; // a new prompt starts a new run
+          liveLog.push(ev); if (liveLog.length > 300) liveLog.shift();
+          const msg = `data: ${JSON.stringify({ type: 'live', event: ev })}\n\n`;
+          for (const c of liveClients) c.write(msg);
+          return json(res, { ok: true, windows: clients.size + liveClients.size });
+        }
         if (url.pathname === '/api/generating/preview') {
           const id = url.searchParams.get('job_id'), j = genJobs.get(id); if (!j) return json(res, { error: 'unknown job_id: post progress first' }, 404);
           genPreview.set(id, await body(req, 4e6)); j.previewV++; j.updatedAt = Date.now(); emitGen(); return json(res, { ok: true });
@@ -1159,7 +1178,7 @@ export function startDaemon() {
   server.listen(PORT, '127.0.0.1', () => console.error(`Frame ${VERSION} · ${BASE} · data in ${HOME}`));
   // Build the on-device speech tool in the background at start, so the first import doesn't wait for the compile.
   media.transcriber().then((t) => console.error(`transcripts: ${t ? t.label : 'no engine (macOS 26 + swiftc, or Whisper)'}`)).catch(() => {});
-  setInterval(() => { for (const c of clients) c.write(': keepalive\n\n'); }, 20000).unref();
+  setInterval(() => { for (const c of [...clients, ...liveClients]) c.write(': keepalive\n\n'); }, 20000).unref();
   // A generator that died without saying so: drop its tile after two silent minutes.
   setInterval(() => { let gone = 0; for (const [id, j] of genJobs) if (Date.now() - j.updatedAt > 120000) { genJobs.delete(id); genPreview.delete(id); gone++; } if (gone) emitGen(true); }, 15000).unref();
   return server;
