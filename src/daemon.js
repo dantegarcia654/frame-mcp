@@ -24,7 +24,7 @@ import { speechCutoffs, cutoffLines, deadAir, deadAirLines } from './speechcheck
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui');
 const PACE = Number(process.env.FRAME_PACE ?? 140);
-const promptRunner = createPromptRunner({ publish: (p) => emit(p) });   // ported from the Codex live prototype
+const promptRunner = createPromptRunner({ publish: (p) => emitPromptUpdate(p) });   // ported from the Codex live prototype
 const projects = new Map();
 const history = new Map();
 const clients = new Set();
@@ -111,6 +111,27 @@ function emit(p, extra) {
   const msg = `data: ${JSON.stringify({ type: 'state', project: p && p.id === currentId ? publicProject(p) : currentId ? publicProject(load(currentId)) : null, projects: listProjects(), lastCallAt, ...extra })}\n\n`;
   for (const c of clients) c.write(msg);
 }
+// Prompt phases carry no timeline changes. Send their small state separately.
+function emitPromptUpdate(p) {
+  if (p.id !== currentId) return;
+  sendProjectDelta(p, { promptJobs: p.promptJobs });
+}
+
+function sendProjectDelta(p, delta) {
+  if (p.id !== currentId) return;
+  const msg = `data: ${JSON.stringify({ type: 'project_delta', id: p.id, lastCallAt, ...delta })}\n\n`;
+  for (const c of clients) c.write(msg);
+}
+
+function emitClipChanges(p, ids, feedEntries, revisions, focuses = []) {
+  p.version++;
+  save(p);
+  sendProjectDelta(p, {
+    version: p.version, clips: p.clips.filter(c => ids.has(c.id)),
+    feedEntries, revisions, focuses, promptJobs: p.promptJobs
+  });
+}
+
 // ───────────────────────── generating: live progress from outside generators (renderers, compositors, AI jobs)
 // They POST {job_id, name, done, total} and, every few frames, a JPEG of what they just composited. The bin shows a
 // "Generating…" tile with the percentage and that frame; clicking it opens a live view. Nothing here is persisted.
@@ -697,22 +718,29 @@ const handlers = {
       await awaitPrep(p, p.clips.filter((c) => tracks.has(c.track) && c.asset).map((c) => c.asset), ['transcript']);
     }
     snapshot(p);
-    const fast = a.fast === true, focuses = new Map();
-    if (a.summary) { feed(p, { kind: 'decision', text: a.summary, agent: a.agent }); if (!fast) { emit(p); if (PACE > 0) await sleep(PACE); } }
+    const fast = a.fast === true, focuses = new Map(), touched = new Set();
+    const feedEntries = [], revisions = [];
+    const clipDelta = fast && a.ops.every(op => op.op === 'patch_graphic' ||
+      (op.op === 'update_clip' && op.params && Object.keys(op).every(k=>['op','id','params','agent','why','ripple'].includes(k))));
+    if (a.summary) { feedEntries.push(feed(p, { kind: 'decision', text: a.summary, agent: a.agent })); if (!fast) { emit(p); if (PACE > 0) await sleep(PACE); } }
     const results = [];
     for (let i = 0; i < a.ops.length; i++) {
       const op = a.ops[i];
       if (p.paused) { results.push(`${i + 1}. ⏸ not applied — the user paused`); continue; }
       try {
         const r = applyRevision(p, op, { loadEnv: loadEnv(p) }, { type: 'agent', name: op.agent || a.agent || 'Agent' });
-        feed(p, { revisionId: r.revision?.id, kind: 'op', op: op.op, text: r.text, why: op.why, clipIds: r.clipIds, t: r.t, agent: op.agent || a.agent });
-        results.push(`${i + 1}. ✓ ${r.text}${r.clipIds?.length && r.clipIds.length <= 6 ? ` [${r.clipIds.join(', ')}]` : ''}`);
-        const focus = { clipIds: r.clipIds, t: r.t, agent: op.agent || a.agent || 'Claude' };
+        const message = clipDelta && op.params?.nodes ? `Revised layers in ${p.clips.find(c=>c.id===op.id)?.label || op.id}` : r.text;
+        feedEntries.push(feed(p, { revisionId: r.revision?.id, kind: 'op', op: op.op, text: message, why: op.why, clipIds: r.clipIds, t: r.t, agent: op.agent || a.agent }));
+        if (r.revision) revisions.push(r.revision);
+        for (const id of r.clipIds || []) touched.add(id);
+        results.push(`${i + 1}. ✓ ${message}${r.clipIds?.length && r.clipIds.length <= 6 ? ` [${r.clipIds.join(', ')}]` : ''}`);
+        const focus = { clipIds: r.clipIds, t: Number.isFinite(a.preview_at) ? a.preview_at : r.t, agent: op.agent || a.agent || 'Claude', canvas: Number.isFinite(a.preview_at) };
         if (fast) focuses.set(focus.agent, focus); else emit(p, { focus });
         if (!fast && PACE > 0 && i < a.ops.length - 1) await sleep(PACE);
       } catch (e) { results.push(`${i + 1}. ✗ ${op.op}: ${e.message}`); }
     }
-    if (fast) { if (focuses.size) for (const focus of focuses.values()) emit(p, { focus }); else emit(p); }
+    if (clipDelta) emitClipChanges(p, touched, feedEntries, revisions, [...focuses.values()]);
+    else if (fast) emit(p, { focuses: [...focuses.values()] });
     if (!fast && clients.size) await waitRasters(p, 1500);
     const issues = timelineIssues(p);
     return [text(`${results.join('\n')}${issues.length ? '\n\n' + issues.map((x) => '⚠ ' + x).join('\n') : ''}\n\n${describe(p)}`)];
@@ -1013,7 +1041,16 @@ async function uiAction(b) {
       const author=promptJob?{type:'agent',name:promptJob.cursor,method:'Live canvas control'}:uiAuthor;
       snapshot(p);
       for (const op of b.ops || []) {
-        try { const r = applyRevision(p, op, { loadEnv: loadEnv(p) }, author); feed(p, { revisionId:r.revision?.id, actor: promptJob?'frame':'user', agent:promptJob?.cursor, kind: 'op', op: op.op, text: r.text, clipIds: r.clipIds, t: r.t });promptRunner.done(p,promptJob,r.revision); if(!promptJob)say('manual edit', `${r.text}${r.clipIds?.length === 1 ? ` [${r.clipIds[0]}]` : ''}`); }
+        try {
+          const r = applyRevision(p, op, { loadEnv: loadEnv(p) }, author);
+          const entry = feed(p, { revisionId:r.revision?.id, actor: promptJob?'frame':'user', agent:promptJob?.cursor, kind: 'op', op: op.op, text: r.text, clipIds: r.clipIds, t: r.t });
+          if (promptJob) {
+            promptRunner.done(p,promptJob,r.revision);
+            emitClipChanges(p, new Set(r.clipIds), [entry], r.revision ? [r.revision] : []);
+            return { ok:true };
+          }
+          say('manual edit', `${r.text}${r.clipIds?.length === 1 ? ` [${r.clipIds[0]}]` : ''}`);
+        }
         catch (e) {if(promptJob)promptRunner.fail(p,promptJob.id,e.message);emit(p);return {error:e.message};}
       }
       break;

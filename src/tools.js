@@ -114,6 +114,7 @@ Text style: size (fraction of frame height, default 0.055), color, stroke, strok
       ops: { type: 'array', items: { type: 'object', required: ['op'], properties: { op: { type: 'string' }, why: { type: 'string' } }, additionalProperties: true } },
       fast: { type: 'boolean', description: 'Apply the edit batch without per-operation writes, broadcasts, pacing or caption-raster waits; publish one cursor update per role. Preview pixels update live.' },
       summary: { type: 'string', description: 'One line describing this batch, shown as a decision before the ops play out.' },
+      preview_at: { type: 'number', description: 'Optional timeline time to show the changed elements and role cursors in the canvas.' },
       agent: { type: 'string', description: 'Optional role label shown on the cursor, e.g. "Cutter", "Captions", "Sound".' }, ...pid,
     } },
   },

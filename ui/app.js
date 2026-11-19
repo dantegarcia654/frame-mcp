@@ -36,9 +36,10 @@ const seenUi = new Set();
 // ───────────────────────── state stream
 function connect() {
   const es = new EventSource('/api/events');
-  es.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.type === 'state') onState(m); else if (m.type === 'generating') { GEN = m.jobs || []; renderGen(); } };
+  es.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.type === 'state') onState(m); else if (m.type === 'project_delta') onProjectDelta(m); else if (m.type === 'generating') { GEN = m.jobs || []; renderGen(); } };
   es.onerror = () => { setStatus('', 'Reconnecting…'); };
 }
+let timelineLayoutKey = "", previewTracks = [];
 function onState(m) {
   const switched = !P || !m.project || P.id !== m.project.id;
   P = m.project; lastCallAt = m.lastCallAt || lastCallAt;
@@ -48,11 +49,49 @@ function onState(m) {
   if (!P) { $('#empty').hidden = false; return; }
   document.title = `${P.name} — Frame`;
   if (sel && !P.clips.some((c) => c.id === sel)) sel = null;
-  renderBin(); renderGen(); renderSteps(); renderFeed(); renderTimeline(); if (!textEditor) renderInspector(); renderStatus(); rasterizeTexts();
+  const order = t => (t[0] === 'A' ? -1 : t[0] === 'T' ? 1000 : 0) + Number(t.slice(1));
+  const byTrack = new Map(P.tracks.map(track => [track, []]));
+  for (const c of P.clips) byTrack.get(c.track)?.push(c);
+  previewTracks = [...byTrack].sort(([a],[b]) => order(a)-order(b)).map(([,list])=>list.sort((a,b)=>a.start-b.start));
+  const layout = JSON.stringify([P.tracks, P.markers, P.clips.map(c=>[c.id,c.track,c.start,c.in,c.out,c.speed,c.label])]);
+  renderBin(); renderGen(); renderSteps(); renderFeed();
+  if (switched || layout !== timelineLayoutKey) {
+    timelineLayoutKey = layout;
+    renderTimeline();
+  }
+  if (!textEditor) renderInspector();
+  renderStatus(); rasterizeTexts();
   if (m.focus) focus(m.focus);
+  if (m.focuses) for (const f of m.focuses) focus(f);
   if (m.rendered) showRender(m.rendered);
   renderCanvasTools(); processPromptJobs(P.promptJobs||[]);
   firstState = false;
+}
+
+function onProjectDelta(m) {
+  if (!P || P.id !== m.id) return;
+  lastCallAt = m.lastCallAt || lastCallAt;
+  if (m.version != null) P.version = m.version;
+  if (m.clips?.length) {
+    const byId = new Map(m.clips.map(c=>[c.id,c]));
+    P.clips = P.clips.map(c=>byId.get(c.id) || c);
+    previewTracks = previewTracks.map(track=>track.map(c=>byId.get(c.id) || c));
+  }
+  if (m.revisions?.length) P.revisions = [...(P.revisions || []), ...m.revisions].slice(-300);
+  if (m.feedEntries?.length) {
+    P.feed = [...P.feed, ...m.feedEntries].slice(-800);
+    renderFeed();
+  }
+  for (const f of m.focuses || []) focus(f);
+  if (m.clips?.length) {
+    renderCanvasTools();
+    if (!textEditor && m.clips.some(c => c.id === sel)) renderInspector();
+  }
+  if (m.promptJobs) {
+    P.promptJobs = m.promptJobs;
+    processPromptJobs(m.promptJobs);
+  }
+  renderStatus();
 }
 
 function renderProjects(list) {
@@ -454,8 +493,18 @@ function focus(f) {
   const cur = record.cur; let target = null;
   for (const id of f.clipIds || []) { const d = document.querySelector(`.clip[data-id="${id}"]`); if (d) { d.classList.add('touch'); target ||= d; } }
   if ($('#follow').checked && f.t != null && !playing && !drag) { if (renderView) showRender(null); seek(Math.min(f.t + 0.02, Math.max(0, P.duration - 1 / (P.fps || 30)))); const sc = $('#scroll'); const x = f.t * pps; if (!autoFit && (x < sc.scrollLeft || x > sc.scrollLeft + sc.clientWidth - 80)) sc.scrollLeft = Math.max(0, x - sc.clientWidth / 3); }
+  if (f.canvas && $('#follow').checked) {
+    tick();
+    const hit = graphicHits.findLast(h=>(f.clipIds || []).includes(h.clip_id));
+    if (hit) {
+      const box = cv.getBoundingClientRect();
+      const dx = (hit.x + Math.min(hit.w * .42, 60)) * box.width / cv.width;
+      const dy = (hit.y + Math.min(hit.h * .33, 35)) * box.height / cv.height;
+      target = { getBoundingClientRect: () => ({left:box.left+dx,top:box.top+dy,width:0,height:0}) };
+    }
+  }
   if (!target && (f.clipIds||[]).some(id=>P.clips.find(c=>c.id===id)?.effect?.type==='live_graphic')) target=document.querySelector('[data-group="graphics"]');
-  if (target && $('#follow').checked) target.scrollIntoView({block:'nearest',inline:'nearest'});
+  if (target?.scrollIntoView && $('#follow').checked) target.scrollIntoView({block:'nearest',inline:'nearest'});
   const r = (target || $('#playhead')).getBoundingClientRect();
   cur.querySelector('span').textContent = f.agent || 'Claude';
   cur.style.opacity = 1; cur.style.transform = `translate(${clamp(r.left + Math.min(r.width / 2, 40), 0, innerWidth - 80)}px, ${r.top + r.height / 2}px)`;
@@ -819,9 +868,8 @@ function tick() {
   for (const k of Object.keys(under)) delete under[k];
   for (const m of mattes.values()) m.used = false;
   let stalled = false;
-  const order = (t) => (t[0] === 'A' ? -1 : t[0] === 'T' ? 1000 : 0) + Number(t.slice(1));
-  for (const track of [...P.tracks].sort((a, b) => order(a) - order(b))) {
-    const list = P.clips.filter((c) => c.track === track).map(view).sort((a, b) => a.start - b.start);
+  for (const trackClips of previewTracks) {
+    const list = trackClips.map(view);
     list.forEach((c, i) => {
       const active = T >= c.start && T < end(c) - 0.0005, soon = !active && c.start > T && c.start - T < 3;
       if (c.kind === 'text') { if (active) { ctx.globalAlpha = clamp((c.opacity ?? 1) * fadeK(c, T), 0, 1); const hit = drawText(ctx, c, cv.width, cv.height); ctx.globalAlpha = 1; textHits.push({ id: c.id, ...hit }); if (c.id === sel) drawSelection(hit, c.id); } return; }
@@ -1065,7 +1113,7 @@ function processPromptJobs(jobs){
   if (latest.get(job.cursor) === job.id && seenPromptPhases.get(job.cursor) !== phase) {
    seenPromptPhases.set(job.cursor, phase);
    if (['routing','ready'].includes(job.status) && !roleCursors.has(job.cursor)) promptCursor(job,row);
-   if (job.status === 'executing' && $('#follow').checked && !playing && !graphicDrag && !graphicInline && !canvasTools.contains(document.activeElement)) {
+   if (job.status === 'executing' && job.client !== promptClientId && $('#follow').checked && !playing && !graphicDrag && !graphicInline && !canvasTools.contains(document.activeElement)) {
     preparePromptControl(job);
     const control = canvasTools.querySelector(`[data-control="${job.route.property}"]`);
     if (control) promptCursor({...job,phase:`${job.element} · ${job.control}`}, control);
