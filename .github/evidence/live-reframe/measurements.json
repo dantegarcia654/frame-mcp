@@ -1,0 +1,119 @@
+{
+  "caller": "Local MCP stdio protocol client",
+  "model": null,
+  "trials": [
+    {
+      "edit": {
+        "execution_id": "tool_ossbuy",
+        "status": "applied",
+        "project_id": "p_0c5vyw",
+        "clip_id": "c_nzrirj",
+        "revision_id": "rev_t8kjo0",
+        "scale": 1.85,
+        "x": 0.05550000000000005,
+        "y": 0.05550000000000005,
+        "started_at": 1795123386631,
+        "applied_at": 1795123386631
+      },
+      "submitted": 1795123386625,
+      "first": {
+        "wall": 1795123386639,
+        "at": 1.1785,
+        "hash": -573317782,
+        "max": 254,
+        "width": 1776,
+        "same": true,
+        "size": 960
+      },
+      "latencyMs": 14,
+      "events": [],
+      "pictureSamples": 59,
+      "longestPaintGapMs": 54,
+      "longestDecodedGapMs": 53,
+      "missedVideoCallbacks": 0,
+      "lowestAudioRms": 0.033539835196408525,
+      "audioSamples": 127
+    },
+    {
+      "edit": {
+        "execution_id": "tool_jat7nz",
+        "status": "applied",
+        "project_id": "p_0c5vyw",
+        "clip_id": "c_nzrirj",
+        "revision_id": "rev_ot0czi",
+        "scale": 1.55,
+        "x": 0.10850000000000001,
+        "y": 0.13950000000000004,
+        "started_at": 1795123389223,
+        "applied_at": 1795123389224
+      },
+      "submitted": 1795123389214,
+      "first": {
+        "wall": 1795123389246,
+        "at": 1.1927000000000116,
+        "hash": -479279707,
+        "max": 254,
+        "width": 1488,
+        "same": true,
+        "size": 960
+      },
+      "latencyMs": 32,
+      "events": [],
+      "pictureSamples": 57,
+      "longestPaintGapMs": 51,
+      "longestDecodedGapMs": 51,
+      "missedVideoCallbacks": 0,
+      "lowestAudioRms": 0.03367095047028989,
+      "audioSamples": 126
+    },
+    {
+      "edit": {
+        "execution_id": "tool_3bzuhe",
+        "status": "applied",
+        "project_id": "p_0c5vyw",
+        "clip_id": "c_nzrirj",
+        "revision_id": "rev_0rjeu1",
+        "scale": 1.85,
+        "x": 0.05550000000000005,
+        "y": 0.05550000000000005,
+        "started_at": 1795123391806,
+        "applied_at": 1795123391806
+      },
+      "submitted": 1795123391798,
+      "first": {
+        "wall": 1795123391823,
+        "at": 1.1927000000000116,
+        "hash": -573317782,
+        "max": 254,
+        "width": 1776,
+        "same": true,
+        "size": 960
+      },
+      "latencyMs": 25,
+      "events": [],
+      "pictureSamples": 58,
+      "longestPaintGapMs": 52,
+      "longestDecodedGapMs": 53,
+      "missedVideoCallbacks": 0,
+      "lowestAudioRms": 0.033681033134007374,
+      "audioSamples": 126
+    }
+  ],
+  "rejected": "Error: Supply zoom from 1 to 3 and source focus x/y from 0 to 1.",
+  "browserAudio": {
+    "startedAt": 1795123385458,
+    "stoppedAt": 1795123394958,
+    "capture": "FRAME video element via Web Audio"
+  },
+  "reopened": true,
+  "export": {
+    "final": "Bloom-live-reframe_v1.mp4",
+    "control": "Bloom-live-reframe_v2.mp4",
+    "submittedAt": 1795123395315,
+    "encoderStartedAt": 1795123395321,
+    "completedAt": 1795123397366,
+    "audioHash": "MD5=30dc88c35d69355c8b8be7350b7a50db",
+    "previewToExportSsim": 0.910186,
+    "previewToSourceSsim": 0.432515
+  }
+}
