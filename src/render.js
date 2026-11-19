@@ -66,11 +66,12 @@ export function buildGraph(p, o) {
       X = Math.round((W - sw) / 2 + (c.x || 0) * W); Y = Math.round((H - sh) / 2 + (c.y || 0) * H);
       if (c.kind === 'image') idx = addInput(['-loop', '1', '-framerate', String(FPS), '-t', f(Math.max(le - ls, 1 / FPS)), '-i', file]);
       else {
-        idx = addInput(['-ss', f(srcIn), '-t', f(Math.max(srcDur, 1 / FPS)), '-i', file]);
+        idx = addInput([...(a.alpha && a.vcodec === 'vp9' ? ['-c:v', 'libvpx-vp9'] : []), '-ss', f(srcIn), '-t', f(Math.max(srcDur, 1 / FPS)), '-i', file]); // libvpx keeps VP9 alpha; the native decoder drops it
         chain.push(`setpts=(PTS-STARTPTS)/${f(c.speed)}`, `fps=${FPS}`);
         if (a.hasAudio && !c.muted && (c.volume ?? 1) > 0 && !o.still) audio.push({ c, idx, ls, le });
       }
       chain.push(`scale=${sw}:${sh}`, 'setsar=1');
+      if (a.alpha) chain.push('format=rgba'); // keep the overlay's transparency through to the composite
       const g = c.grade ? gradeFilters(c.grade) : [];
       if (g.length) chain.push('format=rgba', ...g);
       if (c.key) chain.push(`chromakey=${hex(c.key.color)}:${f(c.key.similarity)}:${f(c.key.blend)}`);

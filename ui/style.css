@@ -121,6 +121,8 @@ aside { background: var(--p); display: flex; flex-direction: column; min-height:
 .clip.text .lb { background: none; font: 600 10px/1.9 -apple-system, sans-serif; position: static; display: block; }
 .clip.text.sel { box-shadow: 0 0 0 2px #000, 0 0 0 3px #fff; }
 .clip.audio { background: #000; }
+.clip.scene { background: linear-gradient(90deg, #ff5b1f22, #7a5cff22), #141418; border-color: #ff5b1f; }
+.clip.scene .lb { background: none; position: static; display: block; font: 600 10px/2.2 -apple-system, sans-serif; color: #ffb594; padding: 0 6px; white-space: nowrap; }
 .clip .h { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; z-index: 2; } .clip .h.l { left: 0; } .clip .h.r { right: 0; }
 .clip:hover .h { background: rgba(255,255,255,.35); } .clip.text:hover .h { background: rgba(0,0,0,.3); }
 #playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: #fff; pointer-events: none; z-index: 5; }

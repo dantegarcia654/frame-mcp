@@ -1,5 +1,7 @@
 // Frame UI. Shows the daemon's project state live, previews the timeline in real time, and lets the human edit the same timeline.
 import { drawText, rasterText, textKey } from './text-draw.js';
+import { drawScene, loadSceneFonts, sceneLabel } from './scene-draw.js';
+loadSceneFonts('');
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -188,6 +190,7 @@ function clipEl(raw, h) {
   const w = Math.max(3, dur(c) * pps);
   d.style.left = `${c.start * pps}px`; d.style.width = `${w}px`;
   if (c.kind === 'text') d.append(el('span', 'lb', esc(c.text.content)));
+  else if (c.kind === 'scene') d.append(el('span', 'lb', esc(sceneLabel(c.scene))));
   else {
     if (a?.thumbs) {
       const tiles = el('div', 'tiles'); const n = clamp(Math.ceil(w / (h * 0.62)), 1, 40);
@@ -284,7 +287,7 @@ let cursorTimer;
 function focus(f) {
   const cur = $('#cursor'); let target = null;
   for (const id of f.clipIds || []) { const d = document.querySelector(`.clip[data-id="${id}"]`); if (d) { d.classList.add('touch'); target ||= d; } }
-  if ($('#follow').checked && f.t != null && !playing && !drag) { if (renderView) showRender(null); seek(f.t + 0.02); const sc = $('#scroll'); const x = f.t * pps; if (x < sc.scrollLeft || x > sc.scrollLeft + sc.clientWidth - 80) sc.scrollLeft = Math.max(0, x - sc.clientWidth / 3); }
+  if ($('#follow').checked && f.t != null && !playing && !drag) { if (renderView) showRender(null); seek(Math.min(f.t + 0.02, Math.max(0, P.duration - 1 / (P.fps || 30)))); const sc = $('#scroll'); const x = f.t * pps; if (!autoFit && (x < sc.scrollLeft || x > sc.scrollLeft + sc.clientWidth - 80)) sc.scrollLeft = Math.max(0, x - sc.clientWidth / 3); }
   const r = (target || $('#playhead')).getBoundingClientRect();
   cur.querySelector('span').textContent = f.agent || 'Claude';
   cur.style.opacity = 1; cur.style.transform = `translate(${clamp(r.left + Math.min(r.width / 2, 40), 0, innerWidth - 80)}px, ${r.top + r.height / 2}px)`;
@@ -427,23 +430,29 @@ function drawVisual(src, sw0, sh0, c, t) {
 function tick() {
   if (!P || renderView) return;
   sizeViewer();
-  if (playing) { T = playT0 + (performance.now() - playW0) / 1000; if (T >= P.duration) { T = P.duration; playing = false; $('#play').textContent = '▶'; } placePlayhead(); const sc = $('#scroll'), x = T * pps; if (x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - 60; }
+  if (playing) { T = playT0 + (performance.now() - playW0) / 1000; if (T >= P.duration) { T = P.duration; playing = false; $('#play').textContent = '▶'; } placePlayhead(); const sc = $('#scroll'), x = T * pps; if (!autoFit && x > sc.scrollLeft + sc.clientWidth - 40) sc.scrollLeft = x - 60; }
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
   for (const s of slots.values()) s.used = false;
+  let stalled = false;
   const order = (t) => (t[0] === 'A' ? -1 : t[0] === 'T' ? 1000 : 0) + Number(t.slice(1));
   for (const track of [...P.tracks].sort((a, b) => order(a) - order(b))) {
     const list = P.clips.filter((c) => c.track === track).map(view).sort((a, b) => a.start - b.start);
     list.forEach((c, i) => {
-      const active = T >= c.start && T < end(c) - 0.0005, soon = !active && c.start > T && c.start - T < 1.5;
+      const active = T >= c.start && T < end(c) - 0.0005, soon = !active && c.start > T && c.start - T < 3;
+      if (c.kind === 'scene') { if (active) { ctx.save(); ctx.globalAlpha = clamp((c.opacity ?? 1) * fadeK(c, T), 0, 1); ctx.scale(cv.width / P.width, cv.height / P.height); drawScene(ctx, c, c.in + (T - c.start) * (c.speed || 1), P.width, P.height, T); ctx.restore(); } return; }
       if (c.kind === 'text') { if (active) { ctx.globalAlpha = clamp((c.opacity ?? 1) * fadeK(c, T), 0, 1); drawText(ctx, c, cv.width, cv.height); ctx.globalAlpha = 1; } return; }
       if (c.kind === 'image') { if (!active) return; let im = images.get(c.asset); if (!im) { im = new Image(); im.src = `/media/${P.id}/${c.asset}`; images.set(c.asset, im); } if (im.complete && im.naturalWidth) drawVisual(im, im.naturalWidth, im.naturalHeight, c, T); return; }
       if (!active && !soon) return;
       const m = mediaFor(c, i); syncMedia(m, c, T, active);
-      if (active && c.kind === 'video' && m.readyState >= 2) { const a = P.assets[c.asset]; drawVisual(m, a.width, a.height, c, T); }
+      if (active && c.kind === 'video') { if (m.readyState >= 2 && !m.seeking) { const a = P.assets[c.asset]; drawVisual(m, a.width, a.height, c, T); } else stalled = true; }
     });
   }
+  // A video that is still seeking/loading must not flash black: hold the last complete frame instead.
+  if (stalled && lastGood.width) ctx.drawImage(lastGood, 0, 0, cv.width, cv.height);
+  else if (!stalled) { if (lastGood.width !== cv.width || lastGood.height !== cv.height) { lastGood.width = cv.width; lastGood.height = cv.height; } lastGood.getContext('2d').drawImage(cv, 0, 0); }
   for (const s of slots.values()) if (!s.used && !s.el.paused) s.el.pause();
 }
+const lastGood = document.createElement('canvas');
 function showRender(id) {
   const v = $('#renderPlayer'); renderView = id;
   if (id) { playing = false; $('#play').textContent = '▶'; for (const s of slots.values()) s.el.pause(); v.src = `/render/${P.id}/${id}?v=${Date.now()}`; v.hidden = false; cv.style.visibility = 'hidden'; sizeViewer(); v.play().catch(() => {}); }

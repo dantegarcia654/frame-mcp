@@ -2,6 +2,7 @@
 // Claude (via MCP) and the human (via the UI) both go through applyOp, so the timeline has one source of truth.
 import { uid, round, clamp, tc } from './util.js';
 import { findPauses } from './media.js';
+import { SCENE_TEMPLATES, sceneLen, sceneLabel } from '../ui/scene-draw.js';
 
 export const ASPECTS = { '9:16': [1080, 1920], '16:9': [1920, 1080], '1:1': [1080, 1080], '4:5': [1080, 1350], '4:3': [1440, 1080] };
 const EPS = 0.001;
@@ -22,7 +23,7 @@ export const projectDuration = (p) => p.clips.reduce((m, c) => Math.max(m, end(c
 export const trackClips = (p, t) => p.clips.filter((c) => c.track === t).sort((a, b) => a.start - b.start);
 const trackEnd = (p, t) => trackClips(p, t).reduce((m, c) => Math.max(m, end(c)), 0);
 const getClip = (p, id) => { const c = p.clips.find((c) => c.id === id); if (!c) throw new Error(`No clip "${id}". Current clips: ${p.clips.map((c) => c.id).join(', ') || 'none'}`); return c; };
-const label = (p, c) => c.kind === 'text' ? `"${c.text.content.slice(0, 28)}"` : (c.label || p.assets[c.asset]?.name || c.id);
+const label = (p, c) => c.kind === 'text' ? `"${c.text.content.slice(0, 28)}"` : c.kind === 'scene' ? `scene ${sceneLabel(c.scene)}` : (c.label || p.assets[c.asset]?.name || c.id);
 
 function ensureTrack(p, t) {
   if (!/^[VTA]\d+$/.test(t)) throw new Error(`Track "${t}" is not valid. Use V1..Vn (video/images), T1..Tn (text), A1..An (audio).`);
@@ -40,12 +41,13 @@ const CLIP_PROPS = ['start', 'in', 'out', 'track', 'speed', 'volume', 'muted', '
 const TEXT_DEFAULT = { content: '', size: 0.055, color: '#ffffff', stroke: '#000000', strokeWidth: 0.14, bg: null, weight: 800, x: 0.5, y: 0.72, maxWidth: 0.84, uppercase: false, font: 'Helvetica Neue, Helvetica, Arial, sans-serif' };
 const TEXT_KEYS = Object.keys(TEXT_DEFAULT);
 // Everything update_clip can change. Anything else is rejected instead of silently ignored, so a "✓" always means it happened.
-const UPDATE_KEYS = [...CLIP_PROPS, 'duration', 'grade', 'key', 'text', 'style'];
+const UPDATE_KEYS = [...CLIP_PROPS, 'duration', 'grade', 'key', 'text', 'style', 'scene'];
 const OP_META = ['op', 'id', 'why', 'agent', 'ripple'];
 
 function setProps(p, c, a) {
   for (const k of CLIP_PROPS) if (a[k] !== undefined && a[k] !== null) c[k] = a[k];
-  if (a.duration != null && (c.kind === 'text' || c.kind === 'image')) { c.in = 0; c.out = Number(a.duration); }
+  if (a.duration != null && (c.kind === 'text' || c.kind === 'image' || c.kind === 'scene')) { c.in = 0; c.out = Number(a.duration); if (c.kind === 'scene') c.scene.len = Number(a.duration); }
+  if (c.kind === 'scene' && a.scene) { const tpl = a.scene.template || c.scene.template; if (!SCENE_TEMPLATES[tpl]) throw new Error(`Unknown scene template "${tpl}". Templates: ${Object.keys(SCENE_TEMPLATES).join(', ')}.`); c.scene = { ...c.scene, ...a.scene, template: tpl }; }
   if (a.grade !== undefined) c.grade = a.grade ? { ...(c.grade || {}), ...a.grade } : undefined;
   if (a.key !== undefined) c.key = a.key ? { color: '#00ff00', similarity: 0.3, blend: 0.08, ...(c.key || {}), ...a.key } : undefined;
   if (c.kind === 'text') {
@@ -173,6 +175,20 @@ export function applyOp(p, a, ctx = {}) {
       p.clips.push(c);
       return { text: `Text ${label(p, c)} on ${c.track} at ${tc(c.start)} for ${round(dur(c), 2)}s`, clipIds: [c.id], t: c.start };
     }
+    case 'add_scene': {
+      // A motion-designed explainer beat drawn by ui/scene-draw.js (live in the window, headless Chrome for frame_view/render).
+      const tpl = a.template || a.scene?.template;
+      if (!SCENE_TEMPLATES[tpl]) throw new Error(`add_scene needs template: one of ${Object.keys(SCENE_TEMPLATES).join(', ')}.`);
+      const params = { ...(a.scene || {}) };
+      for (const [k, v] of Object.entries(a)) if (!['op', 'id', 'why', 'agent', 'ripple', 'scene', 'start', 'track', 'duration', 'label', 'fadeIn', 'fadeOut', 'opacity'].includes(k)) params[k] = v;
+      params.template = tpl;
+      const len = Number(a.duration) || sceneLen(params); params.len = len;
+      const track = a.track || 'V1'; ensureTrack(p, track);
+      const c = { id: uid('c_'), kind: 'scene', track, start: 0, in: 0, out: len, speed: 1, opacity: 1, scene: params };
+      setProps(p, c, { label: a.label, fadeIn: a.fadeIn, fadeOut: a.fadeOut, start: a.start === undefined || a.start === null || a.start === 'append' ? trackEnd(p, track) : a.start, track });
+      p.clips.push(c);
+      return { text: `Scene ${sceneLabel(params)} on ${c.track} at ${tc(c.start)} for ${round(dur(c), 2)}s`, clipIds: [c.id], t: c.start };
+    }
     case 'add_captions': {
       const track = a.track || 'T1'; ensureTrack(p, track);
       let phrases = a.phrases;
@@ -197,7 +213,8 @@ export function applyOp(p, a, ctx = {}) {
       if (unknown.length) throw new Error(`update_clip does not change ${unknown.map((k) => `"${k}"`).join(', ')}${unknown.includes('asset') ? ' — to put different footage in this slot use replace_source {id, asset, in}' : ''}. It changes: ${UPDATE_KEYS.join(', ')}. Nothing was changed.`);
       if ((a.text != null || a.style) && c.kind !== 'text') throw new Error(`${label(p, c)} is a ${c.kind} clip; text and style only apply to text clips. Nothing was changed.`);
       if (a.style) { const bad = Object.keys(a.style).filter((k) => !TEXT_KEYS.includes(k) || k === 'content'); if (bad.length) throw new Error(`Unknown text style ${bad.map((k) => `"${k}"`).join(', ')}. Text style keys: ${TEXT_KEYS.filter((k) => k !== 'content').join(', ')}. Nothing was changed.`); }
-      if (a.duration != null && !['text', 'image'].includes(c.kind)) throw new Error(`duration applies to text and image clips; for ${c.kind} change in/out or use trim_clip. Nothing was changed.`);
+      if (a.scene && c.kind !== 'scene') throw new Error(`${label(p, c)} is a ${c.kind} clip; scene params only apply to scene clips. Nothing was changed.`);
+      if (a.duration != null && !['text', 'image', 'scene'].includes(c.kind)) throw new Error(`duration applies to text and image clips; for ${c.kind} change in/out or use trim_clip. Nothing was changed.`);
       const before = { start: c.start, in: c.in, out: c.out, track: c.track, dur: dur(c) };
       const backup = JSON.stringify(c);
       try { if (a.track && a.track !== c.track) { ensureTrack(p, a.track); checkKindTrack(c.kind, a.track); } setProps(p, c, a); }
@@ -350,7 +367,7 @@ export function applyOp(p, a, ctx = {}) {
       return { text: `Project: ${p.name} · ${p.width}×${p.height} · ${p.fps} fps`, clipIds: [], t: null };
     }
     default:
-      throw new Error(`Unknown op "${op}". Ops: add_clip, keep_ranges, replace_source, trim_clip, extend_clip, add_text, add_captions, style_text, update_clip, split_clip, delete_clip, cut_range, remove_silences, close_gaps, clear_track, add_marker, delete_marker, set_project.`);
+      throw new Error(`Unknown op "${op}". Ops: add_clip, add_scene, keep_ranges, replace_source, trim_clip, extend_clip, add_text, add_captions, style_text, update_clip, split_clip, delete_clip, cut_range, remove_silences, close_gaps, clear_track, add_marker, delete_marker, set_project.`);
   }
 }
 
@@ -380,7 +397,7 @@ export function describe(p) {
     lines.push(`${t}:`);
     for (const c of cs) {
       const fx = [c.speed !== 1 && `speed ${c.speed}`, c.volume !== 1 && c.volume != null && `vol ${c.volume}`, c.muted && 'muted', c.scale && c.scale !== 1 && `scale ${c.scale}`, (c.x || c.y) && `pos ${c.x},${c.y}`, c.fit === 'contain' && 'contain', c.opacity != null && c.opacity !== 1 && `opacity ${c.opacity}`, c.fadeIn && `fadeIn ${c.fadeIn}`, c.fadeOut && `fadeOut ${c.fadeOut}`, c.grade && `grade ${JSON.stringify(c.grade)}`, c.key && `key ${c.key.color}`].filter(Boolean).join(' · ');
-      lines.push(c.kind === 'text'
+      lines.push(c.kind === 'scene' ? `  ${c.id} · ${round(c.start, 2)}–${round(end(c), 2)}s · scene ${JSON.stringify(c.scene)}` : c.kind === 'text'
         ? `  ${c.id} · ${round(c.start, 2)}–${round(end(c), 2)}s · "${c.text.content}"`
         : `  ${c.id} · ${round(c.start, 2)}–${round(end(c), 2)}s · ${c.asset} src ${c.in}–${c.out}${p.assets[c.asset]?.duration && c.kind !== 'image' ? ` (footage left: ${round(c.in, 1)}s before, ${round(p.assets[c.asset].duration - c.out, 1)}s after)` : ''}${c.label ? ` · ${c.label}` : ''}${fx ? ` · ${fx}` : ''}`);
     }

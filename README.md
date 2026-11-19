@@ -112,6 +112,7 @@ frame install    register with Claude Code
 frame open       open the window
 frame doctor     check ffmpeg / whisper / service
 frame call <tool> '<json>'   call any tool from a shell
+frame speedrun <file>        raw clip → speech cut, vertical crop, punch-ins, captions, render, live in the window
 frame stop       stop the local service
 ```
 

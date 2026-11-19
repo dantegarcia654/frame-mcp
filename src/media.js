@@ -29,16 +29,19 @@ export async function probe(file) {
     if (Math.abs(rot) % 180 === 90) [w, h] = [h, w];
     const [n, d] = (v.avg_frame_rate || v.r_frame_rate || '30/1').split('/').map(Number);
     Object.assign(info, { width: w, height: h, fps: round(d ? n / d : 30, 2), vcodec: v.codec_name });
+    // Transparency (ProRes 4444, QuickTime RLE, PNG video, VP9 with alpha): previewed through a VP9-alpha proxy.
+    info.alpha = /^(yuva|rgba|argb|bgra|abgr|gbrap|ya)/.test(v.pix_fmt || '') || v.tags?.alpha_mode === '1' || v.tags?.ALPHA_MODE === '1';
   }
   if (a) info.acodec = a.codec_name;
   if (kind === 'image') { info.duration = 0; info.hasAudio = false; }
   // Browsers cannot play every codec/container; those get a small H.264 proxy for preview only.
   // Also proxy anything bigger than ~720p: several 1080p/4K H.264 streams decoding at once is what makes in-browser playback stutter.
-  info.needsProxy = kind === 'video' && (!WEB_VCODECS.has(info.vcodec) || /\.(mkv|avi|mts|mxf)$/i.test(file) || Math.max(info.width || 0, info.height || 0) > 1280);
+  info.needsProxy = kind === 'video' && !(info.alpha && info.vcodec === 'vp9') && (!!info.alpha || !WEB_VCODECS.has(info.vcodec) || /\.(mkv|avi|mts|mxf)$/i.test(file) || Math.max(info.width || 0, info.height || 0) > 1280);
   return info;
 }
 
 /** Sprite strip of evenly spaced frames, for the bin and the timeline clips. */
+const BG = process.platform === 'win32' ? (c, a) => [c, a] : (c, a) => ['nice', ['-n', '19', c, ...a]]; // background work yields the CPU to the edit
 export async function makeThumbs(file, info, outFile) {
   if (info.kind === 'audio') return 0;
   if (info.kind === 'image') {
@@ -47,12 +50,13 @@ export async function makeThumbs(file, info, outFile) {
   }
   const n = Math.max(1, Math.min(40, Math.ceil(info.duration / 1.5)));
   const rate = n / Math.max(info.duration, 0.1);
-  await run('ffmpeg', ['-v', 'error', '-y', '-i', file, '-vf', `fps=${rate},scale=-2:120,tile=${n}x1`, '-frames:v', '1', '-q:v', '6', outFile]);
+  await run(...BG('ffmpeg', ['-v', 'error', '-y', '-i', file, '-vf', `fps=${rate},scale=-2:120,tile=${n}x1`, '-frames:v', '1', '-q:v', '6', outFile]));
   return n;
 }
 
-export async function makeProxy(file, outFile) {
-  await run('ffmpeg', ['-v', 'error', '-y', '-i', file, '-vf', 'scale=-2:720', '-r', '30', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28', '-g', '10', '-keyint_min', '10', '-sc_threshold', '0', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', outFile]); // keyframe every ~0.33 s: scrubbing and clip jumps seek instantly
+export async function makeProxy(file, outFile, alpha = false) {
+  if (alpha) return run(...BG('ffmpeg', ['-v', 'error', '-y', '-i', file, '-vf', 'scale=-2:720', '-r', '30', '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', '-deadline', 'realtime', '-cpu-used', '8', '-row-mt', '1', '-b:v', '0', '-crf', '30', '-g', '10', '-an', outFile])); // Chrome keeps VP9 alpha in <video> and on canvas
+  await run(...BG('ffmpeg', ['-v', 'error', '-y', '-i', file, '-vf', 'scale=-2:720', '-r', '30', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28', '-g', '10', '-keyint_min', '10', '-sc_threshold', '0', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', outFile])); // keyframe every ~0.33 s: scrubbing and clip jumps seek instantly
 }
 
 /** Decode to 8 kHz mono and measure 50 peak + RMS windows per second. */
@@ -113,7 +117,7 @@ export function findPauses(env, { threshold_db, min_silence = 0.45, from = 0, to
 }
 
 export async function loudness(file) {
-  const r = await run('ffmpeg', ['-hide_banner', '-nostats', '-i', file, '-vn', '-af', 'ebur128=peak=true', '-f', 'null', '-'], { strict: false });
+  const r = await run(...BG('ffmpeg', ['-hide_banner', '-nostats', '-i', file, '-vn', '-af', 'ebur128=peak=true', '-f', 'null', '-']), { strict: false });
   const sum = r.stderr.slice(r.stderr.lastIndexOf('Summary:'));
   const I = sum.match(/I:\s+(-?[\d.]+) LUFS/), P = sum.match(/Peak:\s+(-?[\d.]+) dBFS/);
   return I ? { lufs: Number(I[1]), true_peak_db: P ? Number(P[1]) : null } : null;
@@ -125,10 +129,12 @@ export async function sceneCuts(file, threshold = 0.3) {
 }
 
 /** Word-level transcript via a locally installed Whisper. Returns null if none is installed. */
+let whisperCmd; // found once per process: the probe imports PyTorch, which can take well over 20 s from a cold start
 export async function whisperAvailable() {
+  if (whisperCmd) return whisperCmd;
   // Windows has no python3 (that name opens the Microsoft Store); it is python or py there.
   for (const c of [['whisper'], ['python3', '-m', 'whisper'], ['python', '-m', 'whisper'], ['py', '-m', 'whisper']]) {
-    try { const r = await run(c[0], [...c.slice(1), '--help'], { strict: false, timeout: 20000 }); if (r.code === 0 && /word_timestamps/.test(r.stdout + r.stderr)) return c; } catch {}
+    try { const r = await run(c[0], [...c.slice(1), '--help'], { strict: false, timeout: 120000 }); if (r.code === 0 && /word_timestamps/.test(r.stdout + r.stderr)) return (whisperCmd = c); } catch {}
   }
   return null;
 }
@@ -143,6 +149,7 @@ export async function transcribe(file, { model = 'base.en', language } = {}, onL
   if (language) args.push('--language', language);
   await run(cmd[0], args, { onStderr: onLog, timeout: 30 * 60000 });
   const j = JSON.parse(fs.readFileSync(path.join(dir, 'audio.json'), 'utf8'));
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   const words = [];
   for (const seg of j.segments || []) for (const w of seg.words || []) words.push({ text: w.word.trim(), start: round(w.start, 2), end: round(w.end, 2) });
   fs.rmSync(dir, { recursive: true, force: true });

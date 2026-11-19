@@ -19,6 +19,8 @@ const PACE = Number(process.env.FRAME_PACE ?? 140);
 const projects = new Map();
 const history = new Map();
 const clients = new Set();
+const liveClients = new Set(); // windows showing the live activity panel
+const liveLog = [];          // events of the current run (cleared on each new prompt)
 let currentId = null;
 let lastCallAt = 0;
 
@@ -36,12 +38,21 @@ function load(id) {
 }
 /** Backfill light preview proxies for big footage, one at a time in the background (never blocks the user). Renders still use the originals. */
 let proxyChain = Promise.resolve();
+/** Thumbnails, loudness and the preview proxy, one asset at a time, off the editing path. */
+function backgroundPrep(p, a, file) {
+  proxyChain = proxyChain.then(async () => {
+    try { a.thumbs = await media.makeThumbs(file, a, cacheFile(p, `${a.id}.thumbs.jpg`)); emit(p); } catch {}
+    try { if (a.hasAudio || a.kind === 'audio') { a.loudness = await media.loudness(file); } } catch {}
+    if (a.needsProxy) { try { a.busy = 'making preview proxy'; emit(p); await media.makeProxy(file, cacheFile(p, proxyName(a)), a.alpha); a.proxy = true; } catch {} finally { delete a.busy; emit(p); } }
+  });
+}
+const proxyName = (a) => `${a.id}.proxy.${a.alpha ? 'webm' : 'mp4'}`; // alpha sources preview as VP9 with transparency
 function ensureProxies(p) {
   for (const a of Object.values(p.assets || {})) {
-    if (a.kind !== 'video' || a.proxy || !a.path || Math.max(a.width || 0, a.height || 0) <= 1280 || !fs.existsSync(a.path)) continue;
-    const out = cacheFile(p, `${a.id}.proxy.mp4`);
+    if (a.kind !== 'video' || a.proxy || !a.path || (Math.max(a.width || 0, a.height || 0) <= 1280 && !a.alpha) || !fs.existsSync(a.path)) continue;
+    const out = cacheFile(p, proxyName(a));
     proxyChain = proxyChain.then(async () => {
-      try { a.busy = 'making preview proxy'; emit(p); await media.makeProxy(a.path, out); a.proxy = true; } catch {}
+      try { a.busy = 'making preview proxy'; emit(p); await media.makeProxy(a.path, out, a.alpha); a.proxy = true; } catch {}
       delete a.busy; save(p); emit(p);
     });
   }
@@ -153,16 +164,18 @@ async function importOne(p, file, opts) {
   p.assets[a.id] = a;
   feed(p, { kind: 'op', op: 'import', actor: opts.actor || 'claude', text: `Imported ${a.name}${a.duration ? ` · ${a.duration}s` : ''}${a.width ? ` · ${a.width}×${a.height}` : ''}`, why: opts.why });
   emit(p);
+  // Only what editing needs blocks the import: the probe and the audio envelope (silence cuts, captions timing).
+  // Thumbnails, loudness and the preview proxy follow in the background, so the clip can go on the timeline at once.
   try {
-    a.thumbs = await media.makeThumbs(file, a, cacheFile(p, `${a.id}.thumbs.jpg`)); a.busy = 'listening'; emit(p);
     if (a.hasAudio || a.kind === 'audio') {
+      a.busy = 'listening'; emit(p);
       const env = await media.audioEnvelope(file);
       fs.writeFileSync(cacheFile(p, `${a.id}.env.json`), JSON.stringify({ rate: env.rate, peaks: env.peaks, rms: env.rms.map((v) => round(v, 4)) }));
-      a.hasEnv = true; a.loudness = await media.loudness(file);
+      a.hasEnv = true;
     }
     if (opts.scenes && a.kind === 'video') { a.busy = 'finding scene changes'; emit(p); a.scenes = await media.sceneCuts(file); }
-    if (a.needsProxy) { a.busy = 'making preview proxy'; emit(p); await media.makeProxy(file, cacheFile(p, `${a.id}.proxy.mp4`)); a.proxy = true; }
   } finally { delete a.busy; emit(p); }
+  backgroundPrep(p, a, file);
   return a;
 }
 
@@ -502,7 +515,7 @@ async function uiAction(b) {
 }
 
 // ───────────────────────── HTTP
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm', '.m4v': 'video/mp4', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.json': 'application/json', '.webp': 'image/webp', '.gif': 'image/gif', '.flac': 'audio/flac', '.ogg': 'audio/ogg' };
+const MIME = { '.ttf': 'font/ttf', '.woff2': 'font/woff2', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm', '.m4v': 'video/mp4', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.json': 'application/json', '.webp': 'image/webp', '.gif': 'image/gif', '.flac': 'audio/flac', '.ogg': 'audio/ogg' };
 function sendFile(req, res, file, cache = 'no-cache') {
   let st; try { st = fs.statSync(file); } catch { res.writeHead(404).end('not found'); return; }
   const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
@@ -532,7 +545,17 @@ export function startDaemon() {
       const url = new URL(req.url, BASE); const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
       if (req.method === 'GET') {
         if (url.pathname === '/') return sendFile(req, res, path.join(UI_DIR, 'index.html'));
-        if (['app.js', 'text-draw.js', 'style.css', 'favicon.svg'].includes(parts[0]) && parts.length === 1) return sendFile(req, res, path.join(UI_DIR, parts[0]));
+        if (url.pathname === '/live') return sendFile(req, res, path.join(UI_DIR, 'live.html'));
+        if (['app.js', 'text-draw.js', 'scene-draw.js', 'scene-render.html', 'style.css', 'favicon.svg', 'live.js'].includes(parts[0]) && parts.length === 1) return sendFile(req, res, path.join(UI_DIR, parts[0]));
+        if (parts[0] === 'fonts' && parts.length === 2 && /^[\w.-]+\.(ttf|woff2)$/.test(parts[1])) return sendFile(req, res, path.join(UI_DIR, 'fonts', parts[1]), 'public, max-age=86400');
+        // Live activity: what Claude is doing right now, pushed by Claude Code hooks (bin/live-hook.js).
+        if (url.pathname === '/api/live') return json(res, { events: liveLog, windows: clients.size + liveClients.size });
+        if (url.pathname === '/api/live/events') {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+          liveClients.add(res); req.on('close', () => liveClients.delete(res));
+          res.write(`data: ${JSON.stringify({ type: 'backlog', events: liveLog })}\n\n`);
+          return;
+        }
         if (url.pathname === '/api/ping') return json(res, { name: 'frame', version: VERSION, pid: process.pid, clients: clients.size });
         if (url.pathname === '/api/packs') return json(res, { packs: packs.listPacks() });
         if (parts[0] === 'pack' && parts.length === 3) { const pk = packs.getPack(parts[1]); const f = pk && pk.items.find((i) => i.file === parts[2]); return f ? sendFile(req, res, path.join(HOME, 'packs', pk.id, f.file), 'private, max-age=3600') : res.writeHead(404).end(); }
@@ -545,7 +568,7 @@ export function startDaemon() {
           return;
         }
         const p = parts[1] && load(parts[1]);
-        if (p && parts[0] === 'media') { const a = p.assets[parts[2]]; if (!a) return res.writeHead(404).end(); return sendFile(req, res, a.proxy ? cacheFile(p, `${a.id}.proxy.mp4`) : a.path, 'private, max-age=3600'); }
+        if (p && parts[0] === 'media') { const a = p.assets[parts[2]]; if (!a) return res.writeHead(404).end(); return sendFile(req, res, a.proxy ? cacheFile(p, proxyName(a)) : a.path, 'private, max-age=3600'); }
         if (p && parts[0] === 'thumbs') return sendFile(req, res, cacheFile(p, `${path.basename(parts[2])}.thumbs.jpg`), 'private, max-age=3600');
         if (p && parts[0] === 'env') return sendFile(req, res, cacheFile(p, `${path.basename(parts[2])}.env.json`), 'private, max-age=3600');
         if (p && parts[0] === 'cache') return sendFile(req, res, cacheFile(p, path.basename(parts[2])), 'private, max-age=3600');
@@ -555,6 +578,15 @@ export function startDaemon() {
       if (req.method === 'POST') {
         if (url.pathname === '/api/call') { const b = JSON.parse(await body(req)); return json(res, await callTool(b.name, b.arguments || {})); }
         if (url.pathname === '/api/ui') return json(res, await uiAction(JSON.parse(await body(req))));
+        if (url.pathname === '/api/live') {
+          const e = JSON.parse(await body(req, 64e3));
+          const ev = { ...e, at: Date.now() };
+          if (ev.kind === 'prompt') liveLog.length = 0; // a new prompt starts a new run
+          liveLog.push(ev); if (liveLog.length > 300) liveLog.shift();
+          const msg = `data: ${JSON.stringify({ type: 'live', event: ev })}\n\n`;
+          for (const c of liveClients) c.write(msg);
+          return json(res, { ok: true, windows: clients.size + liveClients.size });
+        }
         if (url.pathname === '/api/raster') {
           const p = load(url.searchParams.get('project')); const id = url.searchParams.get('clip');
           const c = p?.clips.find((x) => x.id === id); if (!c) return json(res, { error: 'no clip' }, 404);
@@ -574,6 +606,6 @@ export function startDaemon() {
   });
   server.on('error', (e) => { console.error(e.code === 'EADDRINUSE' ? `Frame is already running on port ${PORT}.` : e.message); process.exit(1); });
   server.listen(PORT, '127.0.0.1', () => console.error(`Frame ${VERSION} · ${BASE} · data in ${HOME}`));
-  setInterval(() => { for (const c of clients) c.write(': keepalive\n\n'); }, 20000).unref();
+  setInterval(() => { for (const c of [...clients, ...liveClients]) c.write(': keepalive\n\n'); }, 20000).unref();
   return server;
 }
