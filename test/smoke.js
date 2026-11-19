@@ -319,7 +319,7 @@ try {
   }
 } finally {
   decideMock.close();
-  daemon.kill(); fs.rmSync(tmp, { recursive: true, force: true });
+  daemon.kill(); fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); // the daemon may still be finishing a write
 }
 console.log(failed ? `\n${failed} check(s) failed` : '\nAll checks passed');
 process.exit(failed ? 1 : 0);
