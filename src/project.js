@@ -1,5 +1,6 @@
 // The timeline model and every operation that can change it.
 // Claude (via MCP) and the human (via the UI) both go through applyOp, so the timeline has one source of truth.
+import { validateReframe } from '../ui/clip-reframe.js';
 import { validateMove, moveAt } from '../ui/clip-move.js';
 import { uid, round, clamp, tc } from './util.js';
 import { findPauses } from './media.js';
@@ -42,10 +43,19 @@ const CLIP_PROPS = ['start', 'in', 'out', 'track', 'speed', 'volume', 'muted', '
 const TEXT_DEFAULT = { content: '', size: 0.055, color: '#ffffff', stroke: '#000000', strokeWidth: 0.14, bg: null, weight: 800, x: 0.5, y: 0.72, maxWidth: 0.84, uppercase: false, font: 'Helvetica Neue, Helvetica, Arial, sans-serif' };
 const TEXT_KEYS = Object.keys(TEXT_DEFAULT);
 // Everything update_clip can change. Anything else is rejected instead of silently ignored, so a "✓" always means it happened.
-const UPDATE_KEYS = [...CLIP_PROPS, 'duration', 'grade', 'key', 'text', 'style', 'params', 'source', 'move'];
+const UPDATE_KEYS = [...CLIP_PROPS, 'duration', 'grade', 'key', 'text', 'style', 'params', 'source', 'move', 'reframe'];
 const OP_META = ['op', 'id', 'why', 'agent', 'ripple'];
 
 function setProps(p, c, a) {
+  const reframe = a.reframe === undefined ? c.reframe : validateReframe(a.reframe);
+  const move = a.move === undefined ? c.move : validateMove(a.move);
+  if ((reframe || move) && !['video', 'image'].includes(c.kind)) {
+    throw new Error('Picture motion applies to video and still clips.');
+  }
+  if (reframe && move) throw new Error('An animated reframe and position keyframes cannot share a clip.');
+  if (reframe && a.reframe === undefined && ['fit', 'scale', 'x', 'y'].some(k => a[k] != null)) {
+    throw new Error('Clear the animated reframe before editing static placement.');
+  }
   for (const k of CLIP_PROPS) if (a[k] !== undefined && a[k] !== null) c[k] = a[k];
   if (a.duration != null && (c.kind === 'text' || c.kind === 'image' || c.kind === 'effect')) { c.in = 0; c.out = Number(a.duration); }
   if (c.kind === 'effect') {
@@ -58,10 +68,6 @@ function setProps(p, c, a) {
     if (a.source) c.source = a.source;
     if (!/^V\d+$/.test(c.source)) throw new Error(`An effect reads a video track (V1, V2…), not "${c.source}".`);
     if (c.source === (a.track || c.track)) throw new Error(`An effect cannot sit on the track it reads (${c.source}). Put it on a track above, e.g. V${Number(c.source.slice(1)) + 1}.`);
-  }
-  if (a.move !== undefined) { // keyframed position (ui/clip-move.js): footage and stills only
-    if (a.move && !['video', 'image'].includes(c.kind)) throw new Error(`move applies to video and image clips, not ${c.kind}. Nothing was changed.`);
-    const m = validateMove(a.move); if (m) c.move = m; else delete c.move;
   }
   if (a.grade !== undefined) c.grade = a.grade ? { ...(c.grade || {}), ...a.grade } : undefined;
   if (a.key !== undefined) c.key = a.key ? { color: '#00ff00', similarity: 0.3, blend: 0.08, ...(c.key || {}), ...a.key } : undefined;
@@ -78,6 +84,14 @@ function setProps(p, c, a) {
   if (c.out - c.in < 0.03) throw new Error(`Clip ${c.id} would be shorter than one frame (in ${c.in}, out ${c.out}).`);
   c.start = Math.max(0, round(c.start)); c.in = round(c.in); c.out = round(c.out);
   ensureTrack(p, c.track); checkKindTrack(c.kind, c.track);
+  if (a.move !== undefined) {
+    if (move) c.move = move;
+    else delete c.move;
+  }
+  if (a.reframe !== undefined) {
+    if (reframe) c.reframe = reframe;
+    else delete c.reframe;
+  }
 }
 
 /** Magnetic timeline: clips on the base track (V1) stay packed, trims ripple, nothing leaves a hole. set_project {magnetic:false} turns it off. */
@@ -108,6 +122,7 @@ function splitAt(p, c, t) {
   const b = JSON.parse(JSON.stringify(c));
   b.id = uid('c_'); b.start = round(t); b.in = src; delete b.fadeIn;
   if (c.move) { const d = t - c.start, at0 = moveAt(c, d); b.move = [{ t: 0, x: at0.x, y: at0.y }, ...c.move.filter((f) => f.t > d).map((f) => ({ ...f, t: round(f.t - d) }))]; } // the right half keeps moving from where it was
+  if (b.reframe) b.reframe.offset += b.start - c.start;
   c.out = src; delete c.fadeOut;
   p.clips.push(b);
   return b;
@@ -353,6 +368,7 @@ export function applyOp(p, a, ctx = {}) {
       // Read back what is now stored and report the differences — never echo the request.
       const was = JSON.parse(backup), show = (v) => (v === undefined || v === null ? 'none' : typeof v === 'object' ? JSON.stringify(v) : String(v));
       for (const k of ['speed', 'volume', 'muted', 'fit', 'scale', 'x', 'y', 'opacity', 'fadeIn', 'fadeOut', 'label']) if (show(was[k]) !== show(c[k])) parts.push(`${k} ${show(was[k])} → ${show(c[k])}`);
+      if (show(was.reframe) !== show(c.reframe)) parts.push(c.reframe ? `animated reframe · ${c.reframe.keyframes.length} keyframes` : 'animated reframe cleared');
       if (show(was.grade) !== show(c.grade)) parts.push(c.grade ? `grade ${Object.entries(c.grade).map(([k, v]) => `${k} ${v}`).join(', ')}` : 'grade removed');
       if (show(was.key) !== show(c.key)) parts.push(c.key ? `keyed out ${c.key.color} (similarity ${c.key.similarity}, blend ${c.key.blend})` : 'key removed');
       if (c.kind === 'effect') {
@@ -530,7 +546,7 @@ export function describe(p) {
     const cs = trackClips(p, t); if (!cs.length) continue;
     lines.push(`${t}:`);
     for (const c of cs) {
-      const fx = [c.speed !== 1 && `speed ${c.speed}`, c.volume !== 1 && c.volume != null && `vol ${c.volume}`, c.muted && 'muted', c.scale && c.scale !== 1 && `scale ${c.scale}`, (c.x || c.y) && `pos ${c.x},${c.y}`, c.fit === 'contain' && 'contain', c.opacity != null && c.opacity !== 1 && `opacity ${c.opacity}`, c.fadeIn && `fadeIn ${c.fadeIn}`, c.fadeOut && `fadeOut ${c.fadeOut}`, c.grade && `grade ${JSON.stringify(c.grade)}`, c.key && `key ${c.key.color}`].filter(Boolean).join(' · ');
+      const fx = [c.speed !== 1 && `speed ${c.speed}`, c.volume !== 1 && c.volume != null && `vol ${c.volume}`, c.muted && 'muted', c.scale && c.scale !== 1 && `scale ${c.scale}`, (c.x || c.y) && `pos ${c.x},${c.y}`, c.fit === 'contain' && 'contain', c.opacity != null && c.opacity !== 1 && `opacity ${c.opacity}`, c.fadeIn && `fadeIn ${c.fadeIn}`, c.fadeOut && `fadeOut ${c.fadeOut}`, c.reframe && `animated crop (${c.reframe.keyframes.length} keyframes)`, c.grade && `grade ${JSON.stringify(c.grade)}`, c.key && `key ${c.key.color}`].filter(Boolean).join(' · ');
       if (c.kind === 'effect') { lines.push(`  ${c.id} · ${round(c.start, 2)}–${round(end(c), 2)}s · effect ${c.effect.type} reading ${c.source} · ${JSON.stringify(c.effect.params)}${c.opacity != null && c.opacity !== 1 ? ` · opacity ${c.opacity}` : ''}${c.fadeIn ? ` · fadeIn ${c.fadeIn}` : ''}${c.fadeOut ? ` · fadeOut ${c.fadeOut}` : ''}`); continue; }
       lines.push(c.kind === 'text'
         ? `  ${c.id} · ${round(c.start, 2)}–${round(end(c), 2)}s · "${c.text.content}"`

@@ -350,7 +350,7 @@ try {
       { op: 'add_clip', asset: 'a1', in: 1, out: 3, fit: 'contain', move: [{ t: 0, x: .1 }] },
     ] });
     const [before] = projOf(project_id).clips;
-    const args = { project_id, clip_id: before.id, zoom: 1.5, focus: { x: 1, y: 0 } };
+    const args = { project_id, clip_id: before.id, zoom: 1.5, focus: { x: 1, y: 0 }, replace_motion: true };
     const bad = await call('frame_reframe', { ...args, zoom: 0 });
     const badClip = await call('frame_reframe', { ...args, clip_id: 'not-a-clip' });
     ok('reframe validates target and zoom before editing', bad.isError && badClip.isError
@@ -372,6 +372,32 @@ try {
     ok('reframe can restore the previous fit and motion in Review', restored.fit === before.fit
       && restored.scale === before.scale && restored.x === before.x && restored.y === before.y
       && JSON.stringify(restored.move) === JSON.stringify(move));
+    const keyframes = [
+      { t: .5, zoom: 1, x: .5, y: .5 }, { t: 1.2, zoom: 1.6, x: .6, y: .4 },
+    ];
+    const animated = { project_id, clip_id: before.id, keyframes };
+    const conflict = await call('frame_reframe', animated);
+    const badTime = await call('frame_reframe', { ...animated, replace_motion: true, keyframes: [...keyframes].reverse() });
+    ok('animated reframe rejects invalid times and protects existing motion', conflict.isError
+      && /position keyframes/.test(conflict.text) && badTime.isError && /ordered/.test(badTime.text)
+      && JSON.stringify(projOf(project_id).clips[0].move) === JSON.stringify(move));
+    const applied = await call('frame_reframe', { ...animated, replace_motion: true });
+    const animation = JSON.parse(applied.content[0].text);
+    const animatedClip = projOf(project_id).clips[0];
+    ok('animated reframe persists clip-relative keyframes as one reversible edit', animation.status === 'applied'
+      && animatedClip.reframe.keyframes[1].e === 'io' && !animatedClip.move
+      && animatedClip.in === before.in && animatedClip.out === before.out && animatedClip.fit === before.fit);
+    const staticConflict = await call('frame_reframe', { ...args, replace_motion: false });
+    ok('a static crop needs permission to clear crop animation', staticConflict.isError
+      && JSON.stringify(projOf(project_id).clips[0].reframe) === JSON.stringify(animatedClip.reframe));
+    await call('frame_revisions', { project_id, action: 'revert', revision_id: animation.revision_id });
+    ok('animated reframe restores the prior motion on revert', !projOf(project_id).clips[0].reframe
+      && JSON.stringify(projOf(project_id).clips[0].move) === JSON.stringify(move));
+    await call('frame_reframe', { ...animated, replace_motion: true });
+    await call('frame_edit', { project_id, fast: true, ops: [{ op: 'split_clip', id: before.id, at: .8 }] });
+    const [, tail] = projOf(project_id).clips;
+    ok('split retains the easing phase in the right clip', tail?.reframe?.offset === .8
+      && tail.reframe.keyframes[0].t === .5 && tail.in === 1.8);
   }
 } finally {
   decideMock.close();

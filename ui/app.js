@@ -63,7 +63,7 @@ function onState(m) {
   for (const c of P.clips) byTrack.get(c.track)?.push(c);
   previewTracks = [...byTrack].sort(([a],[b]) => order(a)-order(b)).map(([,list])=>list.sort((a,b)=>a.start-b.start));
   const layout = JSON.stringify([P.tracks, P.trackLabels, P.markers, P.clips.map(c =>
-    [c.id, c.track, c.start, c.in, c.out, c.speed, c.label,
+    [c.id, c.track, c.start, c.in, c.out, c.speed, c.label, !!c.reframe,
       presenting ? (c.text?.content ?? c.effect?.params?.nodes?.[0]?.text) : null])]);
   const newActivity = switched ? [] : P.feed.filter(e => !knownFeed.has(e.id));
   renderBin(); renderGen(); renderSteps(); renderFeed();
@@ -123,7 +123,7 @@ function showTimelineActivity(entries) {
     const label = P.clips.find(c => entry.clipIds?.includes(c.id))?.label;
     const message = titleTask
       ? ({ started: 'Revising title', applied: `${label || 'Title'} saved`, failed: 'Title edit failed', unchanged: 'Title already matches' })[entry.phase]
-      : reframeTask ? ({ started: 'Reframing footage', applied: `${label || 'Footage'} reframed`, failed: 'Reframe failed', unchanged: 'Crop already matches' })[entry.phase]
+      : reframeTask ? ({ started: 'Reframing footage', applied: `${label || 'Footage'} ${entry.animated ? 'crop animation saved' : 'reframed'}`, failed: 'Reframe failed', unchanged: 'Crop already matches' })[entry.phase]
       : `${entry.op.replaceAll('_', ' ')}${label ? ' · ' + label : ''}`;
     if (!message) continue;
     status.textContent = `${owner} · ${message}`;
@@ -455,7 +455,7 @@ function clipEl(raw, h) {
     }
     if (a?.hasEnv && !c.muted) { const cv = el('canvas'); cv.height = c.kind === 'audio' ? h - 8 : 14; cv.style.height = `${cv.height}px`; cv.width = clamp(Math.round(w), 2, 4000); d.append(cv); drawWave(cv, c, a); }
     d.append(el('span', 'lb', esc(c.label || a?.name || c.id)));
-    const fx = [c.key && 'KEY', c.grade && 'GRADE', c.speed !== 1 && `${c.speed}×`, c.muted && 'MUTE', (c.fadeIn || c.fadeOut) && 'FADE', c.scale && c.scale !== 1 && 'SCALE'].filter(Boolean);
+    const fx = [c.reframe && 'CROP', c.key && 'KEY', c.grade && 'GRADE', c.speed !== 1 && `${c.speed}×`, c.muted && 'MUTE', (c.fadeIn || c.fadeOut) && 'FADE', c.scale && c.scale !== 1 && 'SCALE'].filter(Boolean);
     if (fx.length) d.append(el('span', 'fx', fx.join(' ')));
   }
   d.append(el('div', 'h l'), el('div', 'h r'));
@@ -655,7 +655,12 @@ function renderInspector() {
     for (const [l, k] of [['Colour', 'color'], ['Outline col.', 'stroke'], ['Box', 'bg']]) { const i = el('input'); i.value = c.text[k] || ''; i.placeholder = 'none'; i.onchange = () => { send({ style: { [k]: i.value || null } }); i.blur(); }; row(l, i); }
   } else {
     box.append(el('div', 'kv', `<span>Source</span><span>${esc((a?.name || '').slice(0, 18))}</span>`));
-    for (const f of FIELDS) { if (c.kind === 'audio' && ['scale', 'x', 'y', 'opacity'].includes(f.key)) continue; if (c.kind === 'image' && ['in', 'out', 'speed', 'volume'].includes(f.key)) continue; row(f.label, numIn(c[f.key] ?? (['fadeIn', 'fadeOut', 'x', 'y'].includes(f.key) ? 0 : 1), f.step, (v) => send({ [f.key]: v }))); }
+    if (c.reframe) {
+      const clear = el('button', '', 'Clear animated crop');
+      clear.onclick = () => send({ reframe: null });
+      row(`${c.reframe.keyframes.length} crop keyframes`, clear);
+    }
+    for (const f of FIELDS) { if (c.reframe && ['scale', 'x', 'y'].includes(f.key)) continue; if (c.kind === 'audio' && ['scale', 'x', 'y', 'opacity'].includes(f.key)) continue; if (c.kind === 'image' && ['in', 'out', 'speed', 'volume'].includes(f.key)) continue; row(f.label, numIn(c[f.key] ?? (['fadeIn', 'fadeOut', 'x', 'y'].includes(f.key) ? 0 : 1), f.step, (v) => send({ [f.key]: v }))); }
     if (c.kind === 'image') row('Duration', numIn(+dur(c).toFixed(3), 0.01, (v) => send({ duration: v })));
     if (c.kind !== 'audio') {
       box.append(el('div', 'sec', 'Grade'));
@@ -741,9 +746,9 @@ function syncMedia(m, c, t, active) {
 }
 // Draws a clip's picture with its placement, grade, key, opacity and fade — onto the viewer, or onto an effect's input canvas.
 function drawVisual(src, sw0, sh0, c, t, ctx = cv.getContext('2d'), Wc = cv.width, Hc = cv.height, { grade = true, key = true } = {}) {
-  const k = Wc / P.width;
-  const s = (c.fit === 'contain' ? Math.min(P.width / sw0, P.height / sh0) : Math.max(P.width / sw0, P.height / sh0)) * (c.scale || 1);
-  const mv = moveAt(c, t - c.start), w = sw0 * s * k, h = sh0 * s * k, x = (Wc - w) / 2 + ((c.x || 0) + mv.x) * Wc, y = (Hc - h) / 2 + ((c.y || 0) + mv.y) * Hc;
+  const rect = placeRect(sw0, sh0, c, Wc, Hc, t - c.start, 2 * Wc / P.width);
+  const mv = moveAt(c, t - c.start);
+  const { w, h } = rect, x = rect.x + mv.x * Wc, y = rect.y + mv.y * Hc;
   const g = grade && c.grade; const filter = g ? `brightness(${g.brightness ?? 1}) contrast(${g.contrast ?? 1}) saturate(${g.saturation ?? 1})` : 'none';
   ctx.globalAlpha = clamp((c.opacity ?? 1) * fadeK(c, t), 0, 1);
   if (key && c.key) {
@@ -894,7 +899,7 @@ function drawEffectClip(c) {
     if (m.readyState >= 2) { mg.globalAlpha = 1; mg.fillStyle = '#000'; mg.fillRect(0, 0, W, H); drawVisual(m, a.width, a.height, u.clip, T, mg, W, H, { grade: false, key: false }); matteShown = a.id; }
     if (matteShown === a.id) matte = fxCv.matte; // while the cutout video seeks, keep its last frame
     const tr = trackFor(a);
-    if (tr) { const b = trackAt(tr, s), r = placeRect(a.width, a.height, u.clip, W, H); face = mapBox(b.face, r); person = mapBox(b.person, r); }
+    if (tr) { const b = trackAt(tr, s), r = placeRect(a.width, a.height, u.clip, W, H, T - u.clip.start, 2 * W / P.width); face = mapBox(b.face, r); person = mapBox(b.person, r); }
     if (playing) fxApprox = true;
   } else if (fx.needs === 'cutout') note = a ? `${fx.label} needs a cutout of ${a.name} — use “Cut out person” in Media` : `${fx.label}: no footage under it on ${c.source || 'V1'}`;
   let plate = null;
@@ -905,7 +910,7 @@ function drawEffectClip(c) {
       let src = images.get(`plate:${pa.id}`), sw = pa.width, sh = pa.height;
       if (!src) { if (pa.kind === 'image') { src = new Image(); src.src = `/media/${P.id}/${pa.id}`; } else { src = document.createElement('video'); src.muted = true; src.preload = 'auto'; src.src = `/media/${P.id}/${pa.id}`; src.addEventListener('loadedmetadata', () => { src.currentTime = (src.duration || 0) / 2; }, { once: true }); } images.set(`plate:${pa.id}`, src); }
       const ready = pa.kind === 'image' ? src.complete && src.naturalWidth : src.readyState >= 2;
-      if (ready) { const pg = fxCv.plate.getContext('2d'); pg.globalAlpha = 1; pg.fillStyle = '#000'; pg.fillRect(0, 0, W, H); drawVisual(src, sw, sh, { ...u.clip, opacity: 1, fadeIn: 0, fadeOut: 0 }, T, pg, W, H, { key: false }); plate = fxCv.plate; }
+      if (ready) { const pg = fxCv.plate.getContext('2d'); pg.globalAlpha = 1; pg.fillStyle = '#000'; pg.fillRect(0, 0, W, H); drawVisual(src, sw, sh, { ...u.clip, opacity: 1, fadeIn: 0, fadeOut: 0 }, u.clip.reframe ? c.start : T, pg, W, H, { key: false }); plate = fxCv.plate; }
     }
   }
   const lg = fxCv.layer.getContext('2d'); lg.setTransform(1, 0, 0, 1, 0, 0); lg.globalAlpha = 1; lg.clearRect(0, 0, W, H);

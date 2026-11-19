@@ -4,6 +4,12 @@
 export const MOVE_EASES = ['lin', 'out', 'in', 'io'];
 const E = { lin: (q) => q, out: (q) => 1 - (1 - q) ** 3, in: (q) => q ** 3, io: (q) => (q < .5 ? 4 * q ** 3 : 1 - (-2 * q + 2) ** 3 / 2) };
 
+export const easeProgress = (ease, q) => E[ease || 'lin'](q);
+export const easeExpression = (ease, q) => ({
+  lin: q, out: `(1-pow(1-${q},3))`, in: `pow(${q},3)`,
+  io: `if(lt(${q},0.5),4*pow(${q},3),1-pow(-2*${q}+2,3)/2)`,
+}[ease || 'lin']);
+
 export function validateMove(m) {
   if (m == null) return null;
   if (!Array.isArray(m) || !m.length || m.length > 16) throw new Error('move must be a list of 1–16 keyframes {t, x?, y?, e?}.');
@@ -24,7 +30,7 @@ export function moveAt(c, lt) {
     for (const f of m) { if (f[k] == null) continue; if (f.t <= lt) p = f; else { n = f; break; } }
     if (!p && !n) continue; if (!p) { out[k] = n[k]; continue; } if (!n) { out[k] = p[k]; continue; }
     const q = Math.min(1, Math.max(0, (lt - p.t) / Math.max(1e-6, n.t - p.t)));
-    out[k] = p[k] + (n[k] - p[k]) * E[n.e || 'lin'](q);
+    out[k] = p[k] + (n[k] - p[k]) * easeProgress(n.e, q);
   }
   return out;
 }
@@ -35,11 +41,10 @@ export function moveExpr(c, k, base, size, t0) {
   if (!fs.length) return String(base);
   const n = (v) => (Math.round(v * 1e4) / 1e4).toString();
   const u = `(t-(${n(t0)}))`;
-  const ease = (e, q) => ({ lin: q, out: `(1-pow(1-${q},3))`, in: `pow(${q},3)`, io: `if(lt(${q},0.5),4*pow(${q},3),1-pow(-2*${q}+2,3)/2)` }[e || 'lin']);
   let expr = n(base + fs.at(-1)[k] * size);
   for (let i = fs.length - 1; i > 0; i--) {
     const a = fs[i - 1], b = fs[i], q = `clip((${u}-${n(a.t)})/${n(Math.max(1e-6, b.t - a.t))},0,1)`;
-    expr = `if(lt(${u},${n(b.t)}),${n(base + a[k] * size)}+(${n((b[k] - a[k]) * size)})*${ease(b.e, q)},${expr})`;
+    expr = `if(lt(${u},${n(b.t)}),${n(base + a[k] * size)}+(${n((b[k] - a[k]) * size)})*${easeExpression(b.e, q)},${expr})`;
   }
   return `if(lt(${u},${n(fs[0].t)}),${n(base + fs[0][k] * size)},${expr})`;
 }

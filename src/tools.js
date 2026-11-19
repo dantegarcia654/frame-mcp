@@ -45,8 +45,8 @@ export const TOOLS = [
   },
   {
     name: 'frame_reframe',
-    description: 'Apply a static cover crop to one video or still in the active project while playback continues. Target the exact clip ID from frame_state. Set magnification relative to cover and a focal point from source pixels (normalized from the top left). FRAME moves the focal point toward frame center and clamps at the source edges. Replaces previous placement and position keyframes for the entire clip. Timing, audio and other clips stay as they are. Returns the actual placement and saved revision.',
-    inputSchema: { type: 'object', required: ['project_id', 'clip_id', 'zoom', 'focus'], properties: {
+    description: 'Save a cover crop for one video or still in the active project during playback. Target the exact clip ID from frame_state. Supply zoom and focus for a static crop, or keyframes for an animated crop. Zoom is relative to cover. x/y are normalized source coordinates from the top left and clamp at the edges. Keyframe times are seconds from the start of the clip. Values hold before the first and after the last keyframe. Ease applies into each keyframe and defaults to io. Existing position keyframes and replacing an animated crop with a static crop require explicit replace_motion:true. Sending new crop keyframes replaces the old crop curve; timing, audio, and other clips are preserved.',
+    inputSchema: { type: 'object', required: ['project_id', 'clip_id'], properties: {
       project_id: { type: 'string' },
       clip_id: { type: 'string' },
       zoom: { type: 'number', minimum: 1, maximum: 3 },
@@ -54,6 +54,16 @@ export const TOOLS = [
         x: { type: 'number', minimum: 0, maximum: 1 },
         y: { type: 'number', minimum: 0, maximum: 1 },
       } },
+      keyframes: { type: 'array', minItems: 2, maxItems: 8, items: {
+        type: 'object', required: ['t', 'zoom', 'x', 'y'], additionalProperties: false, properties: {
+          t: { type: 'number', minimum: 0 },
+          zoom: { type: 'number', minimum: 1, maximum: 3 },
+          x: { type: 'number', minimum: 0, maximum: 1 },
+          y: { type: 'number', minimum: 0, maximum: 1 },
+          e: { type: 'string', enum: ['lin', 'in', 'out', 'io'] },
+        },
+      } },
+      replace_motion: { type: 'boolean', description: 'Explicitly replace existing position keyframes. Defaults to false.' },
     } },
   },
   { name:'frame_revisions', description:'Read the same persistent revision history the human sees, or revert one visual revision. Checks changed properties and preserves unrelated later edits; conflicts are reported.', inputSchema:{type:'object',properties:{...pid,action:{type:'string',enum:['list','revert']},revision_id:{type:'string'},limit:{type:'number'},agent:{type:'string'}}} },
@@ -137,6 +147,7 @@ Ops:
 • close_gaps {track} · clear_track {track} · add_marker {t,label} · delete_marker {id} · set_project {name?, aspect?, fps?, magnetic?}
 
 Clip props: start, in, out, track, speed (0.25–4), volume (0–4), muted, fit ("cover"|"contain"), scale, x, y (offset as a fraction of the frame; 0 = centred), opacity, fadeIn, fadeOut (seconds; fades picture and sound), label,
+reframe {keyframes:[{t,zoom,x,y,e?}],offset?} (animated cover crop; set null to clear; cannot coexist with move).
 grade {brightness, contrast, saturation} (1 = unchanged; saturation 0 = black & white), key {color:"#00ff00", similarity, blend} (chroma key / green screen; set null to remove).
 Effect clips also take params {…} and source ("V1"…), plus start, duration, opacity, fadeIn, fadeOut.
 Text style: size (fraction of frame height, default 0.055), color, stroke, strokeWidth, bg (box colour or null), weight, x, y (centre position 0–1), maxWidth, uppercase, font.`,
