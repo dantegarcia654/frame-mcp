@@ -1,0 +1,27 @@
+{
+  "raw": {
+    "browserAudioStarted": 3.19,
+    "request": 4.97,
+    "visible": 5,
+    "render-animated": 7.48,
+    "export-animated": 9.68,
+    "export-playing": 12.43,
+    "render-pr19-static": 16.8,
+    "export-pr19-static": 18.73,
+    "render-wide": 18.8,
+    "export-wide": 20.98
+  },
+  "videoTrimSec": 2.94,
+  "video": {
+    "browserAudioStarted": 0.25,
+    "request": 2.03,
+    "visible": 2.06,
+    "render-animated": 4.540000000000001,
+    "export-animated": 6.74,
+    "export-playing": 9.49,
+    "render-pr19-static": 13.860000000000001,
+    "export-pr19-static": 15.790000000000001,
+    "render-wide": 15.860000000000001,
+    "export-wide": 18.04
+  }
+}

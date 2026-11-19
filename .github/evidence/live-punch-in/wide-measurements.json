@@ -1,0 +1,117 @@
+{
+  "mode": "960x540 source comparison",
+  "caller": "Local MCP stdio client",
+  "model": null,
+  "renders": {
+    "animated": {
+      "file": "Bloom-study-punch-in_v1.mp4",
+      "elapsedMs": 2032,
+      "audioHash": "MD5=28489449ae40ec82bb31370dc02452ab"
+    },
+    "pr19-static": {
+      "file": "Bloom-study-punch-in_v2.mp4",
+      "elapsedMs": 1740,
+      "audioHash": "MD5=28489449ae40ec82bb31370dc02452ab"
+    },
+    "wide": {
+      "file": "Bloom-study-punch-in_v3.mp4",
+      "elapsedMs": 2030,
+      "audioHash": "MD5=28489449ae40ec82bb31370dc02452ab"
+    }
+  },
+  "parity": [
+    {
+      "time": 0.8,
+      "ssim": 0.972326
+    },
+    {
+      "time": 1.7,
+      "ssim": 0.959457
+    },
+    {
+      "time": 1.8666666666666667,
+      "ssim": 0.958983
+    },
+    {
+      "time": 1.9,
+      "ssim": 0.95137
+    },
+    {
+      "time": 2,
+      "ssim": 0.959093
+    },
+    {
+      "time": 2.1333333333333333,
+      "ssim": 0.964978
+    },
+    {
+      "time": 2.2666666666666666,
+      "ssim": 0.962754
+    },
+    {
+      "time": 2.6,
+      "ssim": 0.960241
+    },
+    {
+      "time": 4,
+      "ssim": 0.958911
+    }
+  ],
+  "rejected": "Error: Reframe times must be ordered clip-relative seconds at least 1 ms apart.",
+  "live": {
+    "animation": {
+      "execution_id": "tool_2c3fm6",
+      "status": "applied",
+      "project_id": "p_iwur0f",
+      "clip_id": "c_02rtq8",
+      "revision_id": "rev_x9wd9z",
+      "keyframes": [
+        {
+          "t": 1.55,
+          "zoom": 1,
+          "x": 0.5,
+          "y": 0.5,
+          "e": "io"
+        },
+        {
+          "t": 2.25,
+          "zoom": 1.6,
+          "x": 0.458,
+          "y": 0.405,
+          "e": "io"
+        }
+      ],
+      "started_at": 1795124871424,
+      "applied_at": 1795124871425
+    },
+    "submitted": 1795124871418,
+    "first": {
+      "wall": 1795124871433,
+      "t": 1.8163000000000467,
+      "hash": 2082648874,
+      "max": 254,
+      "width": 1086.8533246679617,
+      "same": true
+    },
+    "latencyMs": 15,
+    "events": [],
+    "firstSampleTime": 0.6831999999999534,
+    "lastSampleTime": 4.179399999999906,
+    "largestPaintGapMs": 52,
+    "largestDecodedGapMs": 58,
+    "heldZoom": 1.6,
+    "missedDecodedCallbacks": 0,
+    "decodedSamples": 105,
+    "lowestAudioRms": 0.03362816065187048,
+    "audioSamples": 233,
+    "silence": [],
+    "audioStartAt": 1795124869634
+  },
+  "reopened": true,
+  "format": {
+    "width": 960,
+    "height": 540,
+    "nb_frames": "150"
+  },
+  "elapsedMs": 19665
+}

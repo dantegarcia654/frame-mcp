@@ -1,0 +1,23 @@
+{
+  "raw": {
+    "browserAudioStarted": 3.27,
+    "request": 5.06,
+    "visible": 5.1,
+    "render-animated": 7.51,
+    "export-animated": 15.81,
+    "export-playing": 18.42,
+    "render-wide": 24.09,
+    "export-wide": 31.86
+  },
+  "videoTrimSec": 3.02,
+  "video": {
+    "browserAudioStarted": 0.25,
+    "request": 2.0399999999999996,
+    "visible": 2.0799999999999996,
+    "render-animated": 4.49,
+    "export-animated": 12.790000000000001,
+    "export-playing": 15.400000000000002,
+    "render-wide": 21.07,
+    "export-wide": 28.84
+  }
+}

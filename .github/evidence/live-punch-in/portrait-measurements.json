@@ -1,0 +1,112 @@
+{
+  "mode": "1080x1920 creator-style",
+  "caller": "Local MCP stdio client",
+  "model": null,
+  "renders": {
+    "animated": {
+      "file": "Bloom-study-portrait_v1.mp4",
+      "elapsedMs": 7967,
+      "audioHash": "MD5=28489449ae40ec82bb31370dc02452ab"
+    },
+    "wide": {
+      "file": "Bloom-study-portrait_v2.mp4",
+      "elapsedMs": 7467,
+      "audioHash": "MD5=28489449ae40ec82bb31370dc02452ab"
+    }
+  },
+  "parity": [
+    {
+      "time": 0.8,
+      "ssim": 0.982405
+    },
+    {
+      "time": 1.7,
+      "ssim": 0.979779
+    },
+    {
+      "time": 1.8666666666666667,
+      "ssim": 0.977544
+    },
+    {
+      "time": 1.9,
+      "ssim": 0.974445
+    },
+    {
+      "time": 2,
+      "ssim": 0.97718
+    },
+    {
+      "time": 2.1333333333333333,
+      "ssim": 0.978336
+    },
+    {
+      "time": 2.2666666666666666,
+      "ssim": 0.977246
+    },
+    {
+      "time": 2.6,
+      "ssim": 0.975105
+    },
+    {
+      "time": 4,
+      "ssim": 0.972085
+    }
+  ],
+  "rejected": "Error: Reframe times must be ordered clip-relative seconds at least 1 ms apart.",
+  "live": {
+    "animation": {
+      "execution_id": "tool_swc6op",
+      "status": "applied",
+      "project_id": "p_z35176",
+      "clip_id": "c_59qy1p",
+      "revision_id": "rev_aqydif",
+      "keyframes": [
+        {
+          "t": 1.55,
+          "zoom": 1,
+          "x": 0.49,
+          "y": 0.5,
+          "e": "io"
+        },
+        {
+          "t": 2.25,
+          "zoom": 1.28,
+          "x": 0.458,
+          "y": 0.405,
+          "e": "io"
+        }
+      ],
+      "started_at": 1795124900067,
+      "applied_at": 1795124900068
+    },
+    "submitted": 1795124900061,
+    "first": {
+      "wall": 1795124900081,
+      "t": 1.8293999999999069,
+      "hash": -1955901557,
+      "max": 255,
+      "width": 1828.2157853409178,
+      "same": true
+    },
+    "latencyMs": 20,
+    "events": [],
+    "firstSampleTime": 0.6943000000000465,
+    "lastSampleTime": 4.1603000000000465,
+    "largestPaintGapMs": 75,
+    "largestDecodedGapMs": 59,
+    "heldZoom": 1.28,
+    "missedDecodedCallbacks": 0,
+    "decodedSamples": 104,
+    "lowestAudioRms": 0.03355764970178603,
+    "audioSamples": 231,
+    "silence": [],
+    "audioStartAt": 1795124898269
+  },
+  "reopened": true,
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "nb_frames": "150"
+  },
+  "elapsedMs": 30469
+}
