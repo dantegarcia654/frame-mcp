@@ -99,7 +99,7 @@ aside { background: var(--p); display: flex; flex-direction: column; min-height:
 
 #timeline { border-top: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--p); }
 #tlbar { display: flex; align-items: center; gap: 12px; padding: 5px 12px; border-bottom: 1px solid var(--line); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
-#tlbar .keys { text-transform: none; letter-spacing: 0; color: var(--dim2); } #tlbar button { padding: 2px 9px; font-size: 10px; }
+#tlbar .keys { text-transform: none; letter-spacing: 0; color: var(--dim2); min-width: 0; flex: 0 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } #tlbar > :not(.keys) { flex-shrink: 0; } #tlbar button { padding: 2px 9px; font-size: 10px; }
 #zoom { width: 110px; accent-color: #fff; }
 #tlbody { flex: 1; display: grid; grid-template-columns: 112px minmax(0, 1fr); min-height: 0; overflow-y: auto; }
 #heads { padding-top: 22px; border-right: 1px solid var(--line); }
@@ -191,3 +191,45 @@ aside { background: var(--p); display: flex; flex-direction: column; min-height:
 .genSheet .gbar { height: 4px; background: var(--line); margin: 6px 0 12px; } .genSheet .gbar i { display: block; height: 100%; width: 0; background: #fff; transition: width .3s linear; }
 .genSheet .gnote { margin-top: 8px; font: 11px var(--mono); }
 #closeGen { float: right; }
+
+/* Separate work in progress from the editing room. Hidden views stay mounted. */
+[hidden] { display: none !important; }
+#workspaceTabs { display: flex; gap: 2px; border: 1px solid var(--line2); border-radius: 4px; padding: 2px; }
+#workspaceTabs button { border: 0; padding: 4px 10px; color: var(--dim); }
+#workspaceTabs button[aria-selected="true"] { background: var(--fg); color: var(--bg); }
+#workspaceTabs span { font: 10px var(--mono); margin-left: 4px; }
+.addAssets { margin: 0 12px 10px; text-align: left; }
+#prepareWorkspace { grid-row: 2 / 4; min-height: 0; overflow-y: auto; padding: 28px max(24px, calc((100vw - 1120px)/2)); background: var(--p); }
+.prepHeading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.prepHeading h1 { font-size: 24px; margin: 0; font-weight: 500; }
+.prepHeading p, #prepSummary { color: var(--dim); }
+#prepareWorkspace #addPath { padding: 16px 0; max-width: 600px; }
+#prepareWorkspace h3 { padding: 18px 0 10px; }
+#prepareWorkspace #gen, #prepAssets { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; padding: 0; max-height: none; }
+#prepareWorkspace #gen .th { aspect-ratio: 16/9; }
+#gen:empty::after, #prepAssets:empty::after { content: attr(data-empty); color: var(--dim2); grid-column: 1/-1; padding: 4px 0 12px; }
+.prepCard { padding: 14px; border: 1px solid var(--line2); border-radius: 4px; overflow-wrap: anywhere; }
+.prepCard p, .jobWait { color: var(--dim); line-height: 1.6; }
+.jobWait { padding: 0 10px; font-size: 11px; }
+#prepareWorkspace #steps { overflow: visible; display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+#prepareWorkspace .step { margin: 0; padding: 12px; }
+#prepareWorkspace .step p { color: var(--dim); }
+#prepareWorkspace .step.done { opacity: .55; }
+
+#prepSummary { display: flex; gap: 12px; flex-wrap: wrap; padding: 14px 0; }
+#prepSummary > span { padding: 10px 16px; border: 1px solid var(--line); border-radius: 4px; }
+#prepSummary strong { font-size: 20px; color: var(--fg); margin-right: 6px; font-weight: 500; }
+#prepSummary .attention { border-color: var(--fg); color: var(--fg); }
+.prepBadge { display: inline-block; border: 1px solid var(--line2); padding: 3px 7px; border-radius: 3px; color: var(--dim); font-size: 10px; }
+.prepBadge.attention { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.prepName { display: block; font-size: 14px; font-weight: 500; margin: 12px 0; overflow-wrap: anywhere; }
+.prepFacts { margin: 0 0 16px; font-size: 12px; line-height: 1.6; }
+.prepFacts dt { color: var(--dim); margin-top: 10px; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.prepFacts dd { margin: 2px 0 0; }
+.prepProgress { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
+.prepProgress progress { flex: 1; min-width: 0; height: 6px; accent-color: white; }
+.generationCard small { display: block; margin: 8px 0; }
+#completedWork { margin-top: 24px; color: var(--dim); }
+#completedWork summary { cursor: pointer; padding: 12px 0; }
+#completedSteps { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-bottom: 20px; }
+#prepareWorkspace #steps:empty::after { padding: 4px 0 12px; }

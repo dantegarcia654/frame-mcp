@@ -91,7 +91,7 @@ Timeline duration of a clip is `(out - in) / speed`. Video clips carry their own
 
 ## What happens on a tool call
 
-1. `callTool` in `daemon.js` queues the call (calls run one at a time; `frame_wait` is the exception so it does not block the queue).
+1. `callTool` in `daemon.js` keeps preparation (imports, transcription, cutouts, visual indexing and process outputs) in a separate queue, so an import cannot hold up edits to ready material. Timeline calls remain ordered; `frame_wait` bypasses both queues.
 2. The handler runs. For `frame_edit`, it snapshots the timeline for undo, then applies ops one by one through `applyOp`, appending a feed entry and emitting state after each, with a short pause between (`FRAME_PACE`, default 140 ms) so a person can see them land.
 3. `emit()` bumps the version, writes `project.json`, and sends the whole project to every open window over SSE.
 4. Before returning, `userInput()` drains the inbox and appends it to the tool result as a "FROM THE USER" block. If the project is paused, it also appends a stop notice. This is the only channel from the human to the AI.
@@ -172,3 +172,9 @@ Effects that cover the whole frame (`opaque`) draw the picture under them themse
 ## Security posture
 
 The service listens on 127.0.0.1 only. Every request must carry a Host header of `127.0.0.1:<port>` or `localhost:<port>`, and any Origin header must match, which blocks other websites and DNS rebinding. Media is served only for registered assets. There is no shell-execution tool: `frame_step` records what the AI says it ran; it does not run anything.
+
+## Ready and Preparing
+
+Ready is the editing room. Its bin excludes media with active import, cutout, transcription or visual indexing work, and media with failed import preparation or visual indexing. Preparing shows each blocker, generator-reported progress, unknown remaining time when there is no estimate, and process notes. Switching views keeps the editor mounted. Generated results move into the bin only after a successful import; failed generation and auto-import stay visible until resolved. Generation metadata survives restarts; interrupted progress explicitly waits for the generator to reconnect. External downloads and generators must report their work through `/api/generating` or `frame_step`; Frame cannot infer unreported external work. Preview images are in memory and are republished by the generator after reconnecting.
+
+Run `node test/asset-preparation.js` for the isolated queue and generation-failure regression checks.

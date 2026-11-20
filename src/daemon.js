@@ -133,13 +133,22 @@ function emitClipChanges(p, ids, feedEntries, revisions, focuses = []) {
 }
 
 // ───────────────────────── generating: live progress from outside generators (renderers, compositors, AI jobs)
-// They POST {job_id, name, done, total} and, every few frames, a JPEG of what they just composited. The bin shows a
-// "Generating…" tile with the percentage and that frame; clicking it opens a live view. Nothing here is persisted.
-const genJobs = new Map();     // job_id → { job_id, project_id, name, kind, done, total, note, status, startedAt, updatedAt, previewV }
+// Generators POST {job_id, name, done, total} and optional preview JPEGs.
+// Preparing shows reported progress. Metadata survives restarts; preview images remain in memory.
+const genStateFile = path.join(HOME, 'generation-jobs.json');
+let savedGenJobs = [];
+try { savedGenJobs = JSON.parse(fs.readFileSync(genStateFile, 'utf8')); } catch {}
+const genJobs = new Map((Array.isArray(savedGenJobs) ? savedGenJobs : []).map(j => [j.job_id, {
+  ...j, previewV: 0, ...(j.status === 'running' ? { status: 'disconnected', note: 'Frame restarted. Waiting for the generator to reconnect and report progress.' } : {})
+}]));     // job_id → { job_id, project_id, name, kind, done, total, note, status, startedAt, updatedAt, previewV }
 const genPreview = new Map();  // job_id → latest preview JPEG
 let genEmitAt = 0, genTimer = null;
 function emitGen(force) {
-  const send = () => { genTimer = null; genEmitAt = Date.now(); const msg = `data: ${JSON.stringify({ type: 'generating', jobs: [...genJobs.values()] })}\n\n`; for (const c of clients) c.write(msg); };
+  const send = () => { genTimer = null; genEmitAt = Date.now();
+    const tmp = `${genStateFile}.${process.pid}.tmp`;
+    try { mkdirp(HOME); fs.writeFileSync(tmp, JSON.stringify([...genJobs.values()])); fs.renameSync(tmp, genStateFile); }
+    catch (e) { console.error(`Could not save generation progress: ${e.message}`); try { fs.rmSync(tmp, {force:true}); } catch {} }
+    const msg = `data: ${JSON.stringify({ type: 'generating', jobs: [...genJobs.values()] })}\n\n`; for (const c of clients) c.write(msg); };
   if (force) { if (genTimer) clearTimeout(genTimer); return send(); }
   if (!genTimer) genTimer = setTimeout(send, Math.max(0, 200 - (Date.now() - genEmitAt)));
 }
@@ -150,12 +159,20 @@ function genUpdate(b) {
     project_id: b.project_id ?? j.project_id ?? currentId, name: String(b.name ?? j.name ?? id).slice(0, 120), kind: b.kind || j.kind || 'video',
     done: Number(b.done ?? j.done ?? 0), total: Number(b.total ?? j.total ?? 0), note: b.note != null ? String(b.note).slice(0, 200) : j.note,
     status: ['done', 'failed'].includes(b.status) ? b.status : 'running', updatedAt: now,
+    path: b.path != null ? String(b.path) : j.path,
   });
   genJobs.set(id, j);
   if (j.status === 'running') { emitGen(); return j; }
-  emitGen(true); // show the final state once (100 % or failed), then the tile goes
-  setTimeout(() => { if (genJobs.get(id)?.updatedAt === now) { genJobs.delete(id); genPreview.delete(id); emitGen(true); } }, j.status === 'failed' ? 5000 : 1500);
-  if (j.status === 'done' && b.path && b.auto_import && j.project_id && load(j.project_id)) callTool('frame_import', { project_id: j.project_id, paths: [String(b.path)], prepare: false }).catch(() => {});
+  emitGen(true); // Keep failures and unimported results visible until resolved.
+  if (j.status === 'done' && j.path && b.auto_import && j.project_id && load(j.project_id)) {
+    j.note = 'Generation finished. Importing and preparing the result.';
+    callTool('frame_import', { project_id: j.project_id, paths: [j.path], prepare: false }).then(() => {
+      const p = load(j.project_id), asset = Object.values(p.assets).find(a => a.path === path.resolve(j.path));
+      if (!asset || asset.preparationError) { j.status = 'failed'; j.note = asset?.preparationError || 'Generated output could not be imported. Check the output file and import again.'; }
+      else { genJobs.delete(id); genPreview.delete(id); }
+      emitGen(true);
+    }).catch(e => { j.status = 'failed'; j.note = `Import failed: ${e.message}`; emitGen(true); });
+  }
   return j;
 }
 
@@ -232,10 +249,11 @@ async function importOne(p, file, opts) {
   file = path.resolve(file.replace(/^~(?=[\\/])/, os.homedir()));
   if (!fs.existsSync(file)) throw new Error(`File not found: ${file}`);
   const existing = Object.values(p.assets).find((a) => a.path === file);
-  if (existing) return existing;
+  if (existing && !existing.preparationError) return existing;
+
   const info = await media.probe(file);
   let n = Object.keys(p.assets).length + 1; while (p.assets['a' + n]) n++;
-  const a = { id: 'a' + n, path: file, name: path.basename(file), ...info, busy: 'reading' };
+  const a = { id: existing?.id || 'a' + n, path: file, name: path.basename(file), ...info, busy: 'reading' };
   p.assets[a.id] = a;
   feed(p, { kind: 'op', op: 'import', actor: opts.actor || 'claude', text: `Imported ${a.name}${a.duration ? ` · ${a.duration}s` : ''}${a.width ? ` · ${a.width}×${a.height}` : ''}`, why: opts.why });
   emit(p);
@@ -252,7 +270,9 @@ async function importOne(p, file, opts) {
     const playable = ['h264', 'hevc', 'vp9', 'av1'].includes(a.vcodec) && !/\.(mkv|avi|mts|mxf)$/i.test(file);
     if (a.needsProxy && playable) setImmediate(() => ensureProxies(p));
     else if (a.needsProxy) { a.busy = 'making preview proxy'; emit(p); await media.makeProxy(file, cacheFile(p, `${a.id}.proxy.mp4`)); a.proxy = true; }
-  } finally { delete a.busy; emit(p); }
+  } catch (e) { a.preparationError = e.message; throw e; }
+  finally { delete a.busy; emit(p); }
+  for (const [id, job] of genJobs) if (job.project_id === p.id && job.path && path.resolve(job.path) === file && job.status === 'done') { genJobs.delete(id); genPreview.delete(id); emitGen(true); }
   return a;
 }
 
@@ -996,7 +1016,9 @@ const handlers = {
 };
 
 const MUTATING = new Set(['frame_pack', 'frame_import', 'frame_edit', 'frame_cut_silence', 'frame_render', 'frame_step', 'frame_transcribe', 'frame_camera_move', 'frame_cutout']);
-let chain = Promise.resolve();
+// Preparation must never hold up a timeline edit on already-ready material.
+const PREPARATION_TOOLS = new Set(['frame_import', 'frame_transcribe', 'frame_cutout', 'frame_decide', 'frame_step']);
+let chain = Promise.resolve(), preparationChain = Promise.resolve();
 async function callTool(name, args) {
   const h = handlers[name];
   if (!h) return { content: [text(`Unknown tool ${name}`)], isError: true };
@@ -1019,6 +1041,7 @@ async function callTool(name, args) {
   };
   // frame_wait must not block the queue (the user may act through the UI meanwhile; other sessions may call).
   if (name === 'frame_wait') return exec();
+  if (PREPARATION_TOOLS.has(name)) { const r = preparationChain.then(exec); preparationChain = r.catch(() => {}); return r; }
   const r = chain.then(exec); chain = r.catch(() => {}); return r;
 }
 

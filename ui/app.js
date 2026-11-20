@@ -8,6 +8,9 @@ import { EFFECTS, drawEffect, trackAt, placeRect, mapBox, effectTime } from './e
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const FPS = () => P?.fps || 30, fq = (t) => Math.round(t * FPS()) / FPS(); // whole frames
+const tcf = (t) => { const r = FPS(), f = Math.round(Math.max(0, t || 0) * r), s = Math.floor(f / r); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}:${String(f % r).padStart(2, '0')}`; };
+const MAXPPS = 1500; // about 50 px per frame at 30 fps
 const tc = (t) => { t = Math.max(0, t || 0); const m = Math.floor(t / 60); return `${String(m).padStart(2, '0')}:${(t - m * 60).toFixed(2).padStart(5, '0')}`; };
 const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
 const dur = (c) => (c.out - c.in) / (c.speed || 1);
@@ -46,7 +49,7 @@ function onState(m) {
   if (switched) { known = new Set(); knownFeed = new Set(); $('#feed').innerHTML = ''; sel = null; T = Math.max(0, Number(new URLSearchParams(location.search).get('t')) || 0); firstState = true; autoFit = true; renderView = null; showRender(null); }
   renderProjects(m.projects || []);
   $('#empty').hidden = !!(P && (P.clips.length || Object.keys(P.assets).length));
-  if (!P) { $('#empty').hidden = false; return; }
+  if (!P) { $('#empty').hidden = false; $('#bin').innerHTML = ''; $('#steps').innerHTML = ''; renderGen(); renderPreparation(); return; }
   document.title = `${P.name} — Frame`;
   if (sel && !P.clips.some((c) => c.id === sel)) sel = null;
   const order = t => (t[0] === 'A' ? -1 : t[0] === 'T' ? 1000 : 0) + Number(t.slice(1));
@@ -118,7 +121,57 @@ function renderStatus() {
   if (ago < 180) return setStatus('warm', `Claude active · last action ${Math.round(ago)}s ago`);
   setStatus(activeJobs.length?'busy':'', activeJobs.length?`${activeJobs.length} prompts running`:'Canvas ready');
 }
-setInterval(renderStatus, 1000);
+setInterval(() => { renderStatus(); if (!$('#prepareWorkspace').hidden) renderGen(); }, 1000);
+
+// Keep the editor mounted when switching: playhead, selection and undo remain intact.
+function setWorkspace(preparing) {
+  $('#editWorkspace').hidden = preparing;
+  $('#timeline').hidden = preparing;
+  $('#prepareWorkspace').hidden = !preparing;
+  $('#readyTab').setAttribute('aria-selected', String(!preparing));
+  $('#prepareTab').setAttribute('aria-selected', String(preparing));
+  if (!preparing) requestAnimationFrame(() => { if (P) renderTimeline(); });
+}
+$('#readyTab').onclick = $('#backToReady').onclick = () => setWorkspace(false);
+$('#prepareTab').onclick = $('#prepareAssets').onclick = () => setWorkspace(true);
+$('#workspaceTabs').setAttribute('role', 'tablist');
+$('#workspaceTabs').onkeydown = e => {
+  if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+    e.preventDefault(); e.stopPropagation(); const preparing = e.key === 'End' || (e.key !== 'Home' && $('#readyTab').getAttribute('aria-selected') === 'true');
+    setWorkspace(preparing); (preparing ? $('#prepareTab') : $('#readyTab')).focus();
+  }
+};
+function assetWaits(a) {
+  return [a.busy && `Preparing media: ${a.busy}`, a.cutting && `Separating person: ${a.cutting}`,
+    a.transcribing && 'Transcribing speech', a.decisions?.status === 'pending' && 'Indexing visual content',
+    a.decisions?.status === 'failed' && `Visual indexing failed: ${a.decisions.error || 'Retry indexing.'}`,
+    a.preparationError && `Preparation failed: ${a.preparationError}`].filter(Boolean);
+}
+function prepBadge(label, attention = false) { return el('span', `prepBadge${attention ? ' attention' : ''}`, esc(label)); }
+function prepFacts(waiting, next, timing) {
+  return el('dl', 'prepFacts', `<dt>Waiting on</dt><dd>${esc(waiting)}</dd><dt>Next</dt><dd>${esc(next)}</dd>${timing ? `<dt>Time left</dt><dd>${esc(timing)}</dd>` : ''}`);
+}
+function renderPreparation() {
+  const assets = Object.values(P?.assets || {}), pending = assets.filter(a => assetWaits(a).length);
+  const jobs = GEN.filter(j => P && j.project_id === P.id);
+  const steps = (P?.steps || []).filter(s => !['done', 'complete', 'completed'].includes(s.status));
+  const ready = assets.length - pending.length;
+  $('#readyCount').textContent = ready || '';
+  // Counts are tasks, since a process can prepare several assets at once.
+  const count = pending.length + jobs.length + steps.length;
+  $('#prepareCount').textContent = count || '';
+  $('#assetPrepCount').textContent = pending.length || '';
+  const errors = pending.filter(a => a.preparationError || a.decisions?.status === 'failed').length + jobs.filter(j => ['failed', 'disconnected'].includes(j.status)).length + steps.filter(s => s.status === 'failed').length;
+  $('#prepSummary').innerHTML = `<span><strong>${ready}</strong> ready to edit</span><span><strong>${count - errors}</strong> tasks in progress</span><span class="${errors ? 'attention' : ''}"><strong>${errors}</strong> need attention</span>`;
+  const box = $('#prepAssets'); box.innerHTML = ''; box.dataset.empty = 'No media waiting for preparation.';
+  for (const a of pending) {
+    const row = el('article', 'prepCard');
+    const failed = a.preparationError || a.decisions?.status === 'failed';
+    row.append(prepBadge(failed ? 'Needs attention' : 'Getting ready', !!failed), el('b', 'prepName', esc(a.name)), prepFacts(assetWaits(a).join(' · '), failed ? 'Retry the failed preparation before using this asset.' : 'Moves to Ready when these tasks finish.', failed ? null : 'Not available yet'));
+    if (a.preparationError) { const retry = el('button', '', 'Retry preparation'); retry.onclick = () => post({action:'import', paths:[a.path]}); row.append(retry); }
+    box.append(row);
+  }
+}
 
 // ───────────────────────── bin + steps
 // Audio packs: sounds and soundtracks saved inside Frame. Click ▶ to hear one, + to add it to the project's bin.
@@ -174,8 +227,8 @@ function decisionTip(a) {
 }
 function renderBin() {
   loadPacks(); renderEffectsList();
-  const bin = $('#bin'); bin.dataset.empty = 'Nothing imported yet.';
-  const assets = Object.values(P.assets);
+  const bin = $('#bin'); bin.dataset.empty = 'No ready media yet. Prepare assets to get started.';
+  const assets = Object.values(P.assets).filter(a => !assetWaits(a).length);
   $('#mediaCount').textContent = assets.length || '';
   bin.innerHTML = '';
   for (const a of assets) {
@@ -198,7 +251,14 @@ function renderBin() {
     bin.append(d);
   }
 }
-$('#addPath').onsubmit = (e) => { e.preventDefault(); const i = e.target.querySelector('input'); const v = i.value.trim().replace(/^['"]|['"]$/g, ''); if (v && P) post({ action: 'import', paths: [v] }).then((r) => { if (!r.error) i.value = ''; }); };
+$('#addPath').onsubmit = async (e) => {
+  e.preventDefault(); const i = e.target.querySelector('input'), button = e.target.querySelector('button');
+  const v = i.value.trim().replace(/^['"]|['"]$/g, ''); if (!v || !P) return;
+  button.disabled = true; button.textContent = 'Importing…';
+  try { const r = await post({ action:'import', paths:[v] }); if (!r.error) i.value = ''; }
+  catch { toast('Import connection interrupted. Check Preparing before retrying.'); }
+  finally { button.disabled = false; button.textContent = 'Import'; }
+};
 
 // ───────────────────────── generating: assets still being made outside Frame (renders, composites, AI jobs)
 // Each job reports frames done/total and, every few frames, the frame it just composited. A tile per job sits on top of
@@ -206,27 +266,33 @@ $('#addPath').onsubmit = (e) => { e.preventDefault(); const i = e.target.querySe
 let GEN = [], genOpen = null, genShownV = {};
 const genPct = (j) => (j.total ? clamp(j.done / j.total, 0, 1) : null);
 function genEta(j) {
-  const el_ = (j.updatedAt - j.startedAt) / 1000, rate = el_ > 0 ? j.done / el_ : 0;
+  const el_ = Math.max(0, ((j.status === 'running' ? Date.now() : j.updatedAt) - j.startedAt) / 1000);
+  const measured = (j.updatedAt - j.startedAt) / 1000, fresh = Date.now() - j.updatedAt < 15000;
+  const rate = measured > 0 && fresh ? j.done / measured : 0;
   return { elapsed: el_, eta: j.total && rate > 0 ? (j.total - j.done) / rate : null };
 }
 function renderGen() {
-  const box = $('#gen'); const jobs = GEN.filter((j) => !P || !j.project_id || j.project_id === P.id);
+  const box = $('#gen'); const jobs = GEN.filter((j) => P && j.project_id === P.id);
   box.innerHTML = '';
   for (const j of jobs) {
-    const p = genPct(j), d = el('div', 'asset gen');
-    const th = el('div', 'th');
-    if (j.previewV) th.style.backgroundImage = `url(/api/generating/preview?job_id=${encodeURIComponent(j.job_id)}&v=${j.previewV})`;
-    const label = j.status === 'failed' ? 'Failed' : j.status === 'done' ? 'Done' : !j.done && j.note ? 'Preparing…' : `Generating… ${p == null ? '' : `${Math.round(p * 100)}%`}`;
-    th.append(el('div', 'gl', esc(label)));
-    const bar = el('div', 'gb'); bar.style.width = `${p == null ? 100 : p * 100}%`; if (p == null) bar.classList.add('ind'); th.append(bar);
+    const p = genPct(j), d = el('article', 'prepCard generationCard');
+    const failed = j.status === 'failed', disconnected = j.status === 'disconnected', done = j.status === 'done';
+    const label = failed ? 'Needs attention' : disconnected ? 'Waiting to reconnect' : done ? 'Waiting for import' : 'In progress';
     const { eta } = genEta(j);
-    d.append(th, el('div', 'nm', esc(j.name)), el('div', 'mt', esc(!j.done && j.note ? j.note : `${j.total ? `${j.done}/${j.total}` : j.done || ''} ${j.kind || ''}${eta != null && j.status === 'running' ? ` · ~${Math.ceil(eta)}s left` : ''}`)));
-    d.title = `${j.name}\n${j.note || ''}\nClick to watch it being made`;
-    d.onclick = () => openGen(j.job_id);
+    const waiting = failed ? (j.note || 'The task failed.') : disconnected ? 'The generator needs to reconnect.' : done ? (j.path ? 'The finished file needs to be imported.' : 'The generator has not provided the finished file yet.') : (j.note || 'The generator is creating this asset.');
+    const next = failed ? 'Resolve the error and retry this task.' : disconnected ? 'Progress resumes when the generator reconnects.' : done ? (j.path ? 'Import the result to prepare it for editing.' : 'The generator must send the output file.') : 'The finished file is imported, then moves to Ready.';
+    d.append(prepBadge(label, failed || disconnected), el('b', 'prepName', esc(j.name)), prepFacts(waiting, next, !done && !failed && !disconnected ? (eta == null ? 'Not available yet' : `About ${Math.ceil(eta)} seconds`) : null));
+    if (p != null && !failed && !disconnected && !done) {
+      const progress = el('div', 'prepProgress', `<progress max="100" value="${Math.round(p * 100)}" aria-label="${esc(j.name)} progress"></progress><span>${Math.round(p * 100)}%</span>`); d.append(progress);
+    }
+    if (j.status === 'running' && Date.now() - j.updatedAt > 15000) d.append(el('small', 'dim', `Last update ${Math.floor((Date.now() - j.updatedAt) / 1000)} seconds ago`));
+    if (j.previewV) { const preview = el('button', '', 'View preview'); preview.onclick = () => openGen(j.job_id); d.append(preview); }
+    if (j.path && done) { const button = el('button', '', 'Import result'); button.onclick = () => post({action:'import', paths:[j.path]}); d.append(button); }
     box.append(d);
   }
-  const n = jobs.filter((j) => j.status === 'running').length;
-  $('#mediaCount').textContent = `${P ? Object.keys(P.assets).length || '' : ''}${n ? ` · ${n} generating` : ''}`;
+  $('#generationCount').textContent = jobs.length || '';
+  box.dataset.empty = 'No assets being generated or pulled.';
+  renderPreparation();
   updateGenPanel();
 }
 function openGen(id) { genOpen = id; $('#genPanel').hidden = false; updateGenPanel(true); }
@@ -250,14 +316,24 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && genOpen)
 
 
 function renderSteps() {
-  const box = $('#steps'); box.dataset.empty = 'Scripts, generations and other work Claude does outside the timeline show up here, with the exact code.';
-  $('#stepCount').textContent = P.steps.length || '';
-  box.innerHTML = '';
+  const box = $('#steps'), completed = $('#completedSteps');
+  box.dataset.empty = 'No other work in progress.';
+  box.innerHTML = ''; completed.innerHTML = '';
+  let activeCount = 0, completedCount = 0;
   for (const s of P.steps) {
-    const d = el('div', `step ${s.status}${seenUi.has(s.id) ? '' : ' new'}`, `<b>${esc(s.title || 'Process')}</b><small>${esc(s.tool || '')}${s.tool ? ' · ' : ''}${s.status}${s.endedAt ? ` · ${((s.endedAt - s.startedAt) / 1000).toFixed(1)}s` : ''}</small>`);
-    seenUi.add(s.id); d.onclick = () => openStep(s.id); box.append(d);
+    const done = ['done', 'complete', 'completed'].includes(s.status), failed = s.status === 'failed';
+    const d = el('article', 'prepCard');
+    d.append(prepBadge(done ? 'Finished' : failed ? 'Needs attention' : 'In progress', failed), el('b', 'prepName', esc(s.title || 'Background task')));
+    if (!done) d.append(prepFacts(s.note || (failed ? 'The task failed.' : 'This task is still running.'), failed ? 'Open details to review the error, then retry.' : 'Results appear when this task finishes.'));
+    const details = el('button', '', 'View details'); details.onclick = () => openStep(s.id); d.append(details);
+    (done ? completed : box).append(d); if (done) completedCount++; else activeCount++;
   }
+  $('#stepCount').textContent = activeCount || '';
+  $('#completedCount').textContent = completedCount;
+  $('#completedWork').hidden = !completedCount;
+  renderPreparation();
 }
+
 function openStep(id) {
   const s = P.steps.find((x) => x.id === id); if (!s) return;
   modal(s.title || 'Process', `${s.tool || 'process'} · ${s.status}${s.note ? `\n${s.note}` : ''}${s.outputs?.length ? `\nOutputs: ${s.outputs.map((o) => P.assets[o]?.name || o).join(', ')}` : ''}`, s.code || '(no code recorded)');
@@ -432,28 +508,32 @@ function startDrag(e, raw) {
   const mode = slip ? 'slip' : e.target.classList.contains('l') ? 'l' : e.target.classList.contains('r') ? 'r' : 'move';
   const x0 = e.clientX, a = P.assets[raw.asset]; let moved = false;
   if (slip && (T < raw.start || T >= end(raw))) seek(raw.start + Math.min(0.5, dur(raw) / 2)); // park the playhead in the clip so the preview shows the slip
-  const edges = [0, T, ...P.clips.filter((c) => c.id !== raw.id).flatMap((c) => [c.start, end(c)])];
-  const snap = (t) => { for (const s of edges) if (Math.abs(s - t) * pps < 7) return s; return t; };
+  const edges0 = [0, T, ...P.clips.filter((c) => c.id !== raw.id).flatMap((c) => [c.start, end(c)])];
+  const edges = edges0.map(fq);
+  const snap = (t) => { for (const s of edges) if (Math.abs(s - t) * pps < 7) return s; return fq(t); }; // nearest edge or playhead, always on a whole frame
   const stretch = raw.kind === 'text' || raw.kind === 'image' || raw.kind === 'effect';
   const move = (ev) => {
     const dx = (ev.clientX - x0) / pps; if (Math.abs(ev.clientX - x0) > 2) moved = true; if (!moved) return;
     const cur = {};
     if (mode === 'slip') {
-      const len = raw.out - raw.in, d = clamp(dx * raw.speed, -raw.in, a.duration - raw.out); // drag right = a later moment of the recording
+      const len = raw.out - raw.in, d = clamp(Math.round(dx * raw.speed * FPS()) / FPS(), -raw.in, a.duration - raw.out); // drag right = a later moment of the recording
       cur.in = raw.in + d; cur.out = raw.in + d + len;
       $('#viewMode').textContent = `Slip · source ${tc(cur.in)}–${tc(cur.out)} (${d >= 0 ? '+' : ''}${d.toFixed(2)}s)`;
     } else if (mode === 'move') {
-      let s = snap(raw.start + dx); if (s === raw.start + dx) { const e2 = snap(raw.start + dx + dur(raw)); if (e2 !== raw.start + dx + dur(raw)) s = e2 - dur(raw); }
+      let s = snap(raw.start + dx); if (!edges.includes(s)) { const e2 = snap(raw.start + dx + dur(raw)); if (edges.includes(e2)) s = e2 - dur(raw); }
       cur.start = Math.max(0, s);
+      $('#viewMode').textContent = `Move · ${tcf(cur.start)} → ${tcf(cur.start + dur(raw))}`;
       const lane = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.lane');
       if (lane && lane.dataset.track[0] === raw.track[0]) cur.track = lane.dataset.track;
     } else if (mode === 'l') {
       let s = clamp(snap(raw.start + dx), stretch ? 0 : raw.start - raw.in / raw.speed, end(raw) - 0.1); s = Math.max(0, s);
       cur.start = s; if (stretch) cur.out = raw.out - (s - raw.start); else cur.in = raw.in + (s - raw.start) * raw.speed;
+      $('#viewMode').textContent = `Trim start · ${tcf(s)}`;
     } else {
       const maxEnd = stretch ? Infinity : raw.start + (a.duration - raw.in) / raw.speed;
       const e2 = clamp(snap(end(raw) + dx), raw.start + 0.1, maxEnd);
       cur.out = raw.in + (e2 - raw.start) * raw.speed;
+      $('#viewMode').textContent = `Trim end · ${tcf(e2)}`;
     }
     drag = { id: raw.id, cur }; renderTimeline();
   };
@@ -462,6 +542,7 @@ function startDrag(e, raw) {
     if (!drag) return;
     const c = drag.cur, r3 = (n) => Math.round(n * 1000) / 1000;
     if (mode === 'slip') { $('#viewMode').textContent = 'Live preview'; Object.assign(raw, c); post({ action: 'ops', ops: [{ op: 'slip_clip', id: raw.id, in: r3(c.in) }] }).finally(() => { drag = null; renderTimeline(); }); return; }
+    $('#viewMode').textContent = 'Live preview';
     const op = { op: 'update_clip', id: raw.id };
     if (c.start != null && c.start !== raw.start) op.start = r3(c.start);
     if (c.track && c.track !== raw.track) op.track = c.track;
@@ -480,8 +561,33 @@ $('#lanes').onmousedown = (e) => {
   const up = () => { removeEventListener('mousemove', scrub); removeEventListener('mouseup', up); };
   addEventListener('mousemove', scrub); addEventListener('mouseup', up);
 };
-$('#zoom').oninput = (e) => { autoFit = false; const f = fitPps(); pps = f * Math.pow(400 / f, e.target.value / 100); renderTimeline(); $('#scroll').scrollLeft = T * pps - $('#scroll').clientWidth / 2; };
-$('#fit').onclick = () => { autoFit = true; $('#zoom').value = 0; renderTimeline(); };
+function setZoom(next, at = T, x = $('#scroll').clientWidth / 2) {
+  if (!P) return; const f = fitPps(); autoFit = false; pps = clamp(next, f, MAXPPS);
+  $('#zoom').value = Math.round(100 * Math.log(pps / f) / Math.log(MAXPPS / f)) || 0;
+  renderTimeline(); $('#scroll').scrollLeft = at * pps - x;
+}
+function zoomFit() { autoFit = true; $('#zoom').value = 0; renderTimeline(); }
+$('#zoom').oninput = (e) => { const f = fitPps(); setZoom(f * Math.pow(MAXPPS / f, e.target.value / 100)); };
+$('#scroll').addEventListener('wheel', (e) => { // pinch, or ⌘/Ctrl + scroll, zooms around the pointer
+  if (!(e.ctrlKey || e.metaKey) || !P) return; e.preventDefault();
+  const x = e.clientX - $('#scroll').getBoundingClientRect().left, at = (e.clientX - $('#lanes').getBoundingClientRect().left) / pps;
+  setZoom(pps * Math.exp(-e.deltaY * 0.01), at, x);
+}, { passive: false });
+// Frame-accurate keyboard edits. They go through the same update_clip op as dragging.
+function trimSelToPlayhead(edge) {
+  const c = P?.clips.find((x) => x.id === sel); if (!c) return toast('Select a clip, then press Q or W');
+  const t = fq(T); if (t <= c.start + 1e-6 || t >= end(c) - 1e-6) return toast('Put the playhead inside the selected clip');
+  const r3 = (n) => Math.round(n * 1000) / 1000, stretch = ['text', 'image', 'effect'].includes(c.kind), op = { op: 'update_clip', id: c.id };
+  if (edge === 'in') { op.start = r3(t); if (stretch) op.duration = r3(c.out - (t - c.start)); else op.in = r3(c.in + (t - c.start) * c.speed); }
+  else { const o = c.in + (t - c.start) * c.speed; if (stretch) op.duration = r3(o); else op.out = r3(o); }
+  post({ action: 'ops', ops: [op] }); toast(`${edge === 'in' ? 'Start' : 'End'} trimmed to ${tcf(t)}`);
+}
+function nudgeSel(frames) {
+  const c = P?.clips.find((x) => x.id === sel); if (!c) return toast('Select a clip to nudge');
+  const s = Math.max(0, fq(c.start) + frames / FPS());
+  post({ action: 'ops', ops: [{ op: 'update_clip', id: c.id, start: Math.round(s * 1000) / 1000 }] }); toast(`Start ${tcf(s)}`);
+}
+$('#fit').onclick = zoomFit;
 addEventListener('resize', () => { if (P) renderTimeline(); sizeViewer(); });
 
 // Claude's cursor: fly to whatever it just changed.
@@ -514,7 +620,7 @@ function focus(f) {
 // ───────────────────────── inspector
 const num = (label, key, step = 0.01, get, put) => ({ label, key, step, get, put });
 const FIELDS = [
-  num('Start', 'start'), num('Source in', 'in'), num('Source out', 'out'), num('Speed', 'speed', 0.05), num('Volume', 'volume', 0.05),
+  num('Start', 'start', 'frame'), num('Source in', 'in', 'frame'), num('Source out', 'out', 'frame'), num('Speed', 'speed', 0.05), num('Volume', 'volume', 0.05),
   num('Scale', 'scale', 0.01), num('X', 'x', 0.01), num('Y', 'y', 0.01), num('Opacity', 'opacity', 0.05), num('Fade in', 'fadeIn', 0.05), num('Fade out', 'fadeOut', 0.05),
 ];
 $('#inspector').addEventListener('focusout', () => setTimeout(() => { if (P && !$('#inspector').contains(document.activeElement)) renderInspector(); }, 0)); // catch up on changes skipped while typing
@@ -544,8 +650,8 @@ function renderInspector() {
     const fx = EFFECTS[c.effect.type];
     box.append(el('div', 'sec', esc(fx?.label || c.effect.type)), el('div', 'kv', `<span style="white-space:normal;line-height:1.4;padding:2px 0 4px">${esc(fx?.about || '')}</span>`));
     if (fx?.needs === 'cutout') { const u = P.clips.find((x) => x.track === (c.source || 'V1') && x.kind === 'video' && x.start < end(c) && end(x) > c.start), ua = u && P.assets[u.asset]; box.append(el('div', 'kv', `<span>Cutout</span><span>${ua?.cutout ? 'ready' : ua ? 'needed — Cut out person in Media' : 'no footage under it'}</span>`)); }
-    row('Start', numIn(c.start, 0.01, (v) => send({ start: v })));
-    row('Duration', numIn(+dur(c).toFixed(3), 0.01, (v) => send({ duration: v })));
+    row('Start', numIn(c.start, 1 / FPS(), (v) => send({ start: v })));
+    row('Duration', numIn(+dur(c).toFixed(3), 1 / FPS(), (v) => send({ duration: v })));
     row('Reads', (() => { const i = el('input'); i.value = c.source || 'V1'; i.onchange = () => { send({ source: i.value.trim().toUpperCase() }); i.blur(); }; return i; })());
     if (c.effect.type === 'live_graphic') {
       box.append(el('div', 'sec', 'Graphic layers — changes preview live'));
@@ -579,7 +685,7 @@ function renderInspector() {
       input.title = s.about + (s.kind === 'number' ? ` (${s.min}–${s.max})` : ''); row(k, input);
     }
     box.append(el('div', 'sec', 'Layer'));
-    for (const f of FIELDS.filter((x) => ['opacity', 'fadeIn', 'fadeOut'].includes(x.key))) row(f.label, numIn(c[f.key] ?? (f.key === 'opacity' ? 1 : 0), f.step, (v) => send({ [f.key]: v })));
+    for (const f of FIELDS.filter((x) => ['opacity', 'fadeIn', 'fadeOut'].includes(x.key))) row(f.label, numIn(c[f.key] ?? (f.key === 'opacity' ? 1 : 0), (f.step === 'frame' ? 1 / FPS() : f.step), (v) => send({ [f.key]: v })));
   } else if (c.kind === 'text') {
     box.append(el('div', 'sec', 'Text — Enter saves · ⇧Enter new line · Esc cancels · double-click the caption to edit in place'));
     const ta = el('textarea'); ta.rows = 3; ta.value = c.text.content; ta.id = 'textField';
@@ -591,15 +697,15 @@ function renderInspector() {
     const lr = el('div', 'acts'); for (const n of ['Auto', 1, 2, 3, 4]) { const x = el('button', '', String(n)); x.dataset.lines = n; x.onclick = () => setLines(c, n); lr.append(x); } box.append(lr);
     box.append(el('div', 'sec', 'Text size — or drag the round handle on the caption; the square handle sets line width'));
     const sr = el('div', 'acts'); for (const [t2, k] of [['A−', 1 / 1.1], ['A+', 1.1]]) { const x = el('button', '', t2); x.onclick = () => send({ style: { size: Math.round(clamp(c.text.size * k, 0.012, 0.25) * 1000) / 1000 } }); sr.append(x); } box.append(sr);
-    row('Start', numIn(c.start, 0.01, (v) => send({ start: v })));
-    row('Duration', numIn(+dur(c).toFixed(3), 0.01, (v) => send({ duration: v })));
+    row('Start', numIn(c.start, 1 / FPS(), (v) => send({ start: v })));
+    row('Duration', numIn(+dur(c).toFixed(3), 1 / FPS(), (v) => send({ duration: v })));
     box.append(el('div', 'sec', 'Style'));
     for (const [l, k, s] of [['Size', 'size', 0.005], ['Position X', 'x', 0.01], ['Position Y', 'y', 0.01], ['Max width', 'maxWidth', 0.02], ['Outline', 'strokeWidth', 0.02], ['Weight', 'weight', 100]]) row(l, numIn(c.text[k], s, (v) => send({ style: { [k]: v } })));
     for (const [l, k] of [['Colour', 'color'], ['Outline col.', 'stroke'], ['Box', 'bg']]) { const i = el('input'); i.value = c.text[k] || ''; i.placeholder = 'none'; i.onchange = () => { send({ style: { [k]: i.value || null } }); i.blur(); }; row(l, i); }
   } else {
     box.append(el('div', 'kv', `<span>Source</span><span>${esc((a?.name || '').slice(0, 18))}</span>`));
-    for (const f of FIELDS) { if (c.kind === 'audio' && ['scale', 'x', 'y', 'opacity'].includes(f.key)) continue; if (c.kind === 'image' && ['in', 'out', 'speed', 'volume'].includes(f.key)) continue; row(f.label, numIn(c[f.key] ?? (['fadeIn', 'fadeOut', 'x', 'y'].includes(f.key) ? 0 : 1), f.step, (v) => send({ [f.key]: v }))); }
-    if (c.kind === 'image') row('Duration', numIn(+dur(c).toFixed(3), 0.01, (v) => send({ duration: v })));
+    for (const f of FIELDS) { if (c.kind === 'audio' && ['scale', 'x', 'y', 'opacity'].includes(f.key)) continue; if (c.kind === 'image' && ['in', 'out', 'speed', 'volume'].includes(f.key)) continue; row(f.label, numIn(c[f.key] ?? (['fadeIn', 'fadeOut', 'x', 'y'].includes(f.key) ? 0 : 1), (f.step === 'frame' ? 1 / FPS() : f.step), (v) => send({ [f.key]: v }))); }
+    if (c.kind === 'image') row('Duration', numIn(+dur(c).toFixed(3), 1 / FPS(), (v) => send({ duration: v })));
     if (c.kind !== 'audio') {
       box.append(el('div', 'sec', 'Grade'));
       for (const k of ['brightness', 'contrast', 'saturation']) row(k[0].toUpperCase() + k.slice(1), numIn(c.grade?.[k] ?? 1, 0.05, (v) => send({ grade: { [k]: v } })));
@@ -635,13 +741,21 @@ $('#render').onclick = () => P && post({ action: 'render', quality: 'final' });
 $('#play').onclick = () => togglePlay();
 $('#backToTimeline').onclick = () => showRender(null);
 addEventListener('keydown', (e) => {
+  if (!$('#prepareWorkspace').hidden) return;
   if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { if (e.key === 'Escape') document.activeElement.blur(); return; }
   if (e.key === ' ') { e.preventDefault(); togglePlay(); }
   else if (e.key === 's' || e.key === 'S') splitSel();
   else if ((e.key === 't' || e.key === 'T') && !e.metaKey && !e.ctrlKey) { e.preventDefault(); addTextAtPlayhead(); }
   else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); delSel(e.shiftKey); }
-  else if (e.key === 'ArrowLeft') seek(Math.max(0, T - (e.shiftKey ? 1 : 1 / (P?.fps || 30))));
-  else if (e.key === 'ArrowRight') seek(T + (e.shiftKey ? 1 : 1 / (P?.fps || 30)));
+  else if (e.key === 'ArrowLeft') seek(fq(Math.max(0, T - (e.shiftKey ? 1 : 1 / FPS()))));
+  else if (e.key === 'ArrowRight') seek(fq(T + (e.shiftKey ? 1 : 1 / FPS())));
+  else if ((e.key === 'q' || e.key === 'Q') && !e.metaKey && !e.ctrlKey) trimSelToPlayhead('in');
+  else if ((e.key === 'w' || e.key === 'W') && !e.metaKey && !e.ctrlKey) trimSelToPlayhead('out');
+  else if (e.key === ',' || e.key === '<') { e.preventDefault(); nudgeSel(e.shiftKey ? -10 : -1); }
+  else if (e.key === '.' || e.key === '>') { e.preventDefault(); nudgeSel(e.shiftKey ? 10 : 1); }
+  else if ((e.key === '=' || e.key === '+') && !e.metaKey && !e.ctrlKey) setZoom(pps * 1.6);
+  else if (e.key === '-' && !e.metaKey && !e.ctrlKey) setZoom(pps / 1.6);
+  else if (e.key === '\\') zoomFit();
   else if (e.key === 'z' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); post({ action: e.shiftKey ? 'redo' : 'undo' }); }
   else if (e.key === 'Escape') { $('#modal').hidden = true; select(null); }
 });
