@@ -1204,10 +1204,10 @@ function processPromptJobs(jobs){
  for (const job of listed) {
   const row = el('div','promptRow');
   row.dataset.prompt = job.id;
-  const guidance = job.status === 'needs_input'
-    ? ' No edit was applied. For a multi-part request, paste it into the composer and choose Send to agent with your MCP client connected. For a canvas edit, select one layer and request one change.'
-    : '';
-  row.append(el('b','',esc(job.cursor)),el('span','',esc(job.phase + guidance)));
+  const message = job.status === 'needs_input'
+    ? `No edit was applied. For a multi-part request, paste it into the composer and choose Send to agent with your MCP client connected. For a canvas edit, select one layer and request one change. ${job.phase}`
+    : job.phase;
+  row.append(el('b','',esc(job.cursor)),el('span','',esc(message)));
   if (job.revision_id) {
    const review = el('button','','Review');
    review.onclick = () => openRevision(job.revision_id);
@@ -1217,6 +1217,10 @@ function processPromptJobs(jobs){
   const phase = job.id + ':' + job.status;
   if (latest.get(job.cursor) === job.id && seenPromptPhases.get(job.cursor) !== phase) {
    seenPromptPhases.set(job.cursor, phase);
+   if (job.status === 'needs_input') {
+    const record = roleCursors.get(job.cursor);
+    if (record) { clearTimeout(record.timer); record.cur.style.opacity = 0; }
+   }
    if (['routing','ready'].includes(job.status) && !roleCursors.has(job.cursor)) promptCursor(job,row);
    if (job.status === 'executing' && job.client !== promptClientId && $('#follow').checked && !playing && !graphicDrag && !graphicInline && !canvasTools.contains(document.activeElement)) {
     preparePromptControl(job);
