@@ -67,13 +67,16 @@ try {
   });
   const match = firstCut.match(/\[(c_[a-z0-9]+)\]/i);
   assert.ok(match, `Cannot identify first clip in edit result: ${firstCut.slice(-1200)}`);
-  frame('frame_view', { t: 0.5 });
+  const viewed = frame('frame_view', { t: 0.5 });
+  assert.match(viewed, /\[image image\//, 'FRAME did not return a composited image');
   const revision = frame('frame_edit', {
     fast: true, ops: [{ op: 'trim_clip', id: match[1], edge: 'end', by: 0.5, why: 'Creator asks for a tighter cut' }],
   });
   assert.match(revision, /✓/, 'Revision did not report success');
+  const existing = new Set(fs.readdirSync(output).filter(f => /\.mp4$/i.test(f)));
   const rendered = frame('frame_render', { quality: 'draft', output_dir: output, loudnorm: false }, 600_000);
-  const files = fs.readdirSync(output).filter(f => /\.mp4$/i.test(f)).map(f => path.join(output, f));
+  assert.match(rendered, /Rendered:/, 'FRAME did not report a successful render');
+  const files = fs.readdirSync(output).filter(f => /\.mp4$/i.test(f) && !existing.has(f)).map(f => path.join(output, f));
   assert.ok(files.length, `Render returned without an MP4: ${rendered.slice(-1200)}`);
   const newest = files.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
   const check = external('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', newest]);
