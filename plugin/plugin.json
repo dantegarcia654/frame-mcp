@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "frame",
+  "version": "0.1.0",
+  "description": "FRAME is an interactive visual editing surface inside ChatGPT. Open a live scene, manipulate it, and inspect editing operations.",
+  "homepage": "https://frame-mcp-gateway.lovable.app",
+  "repository": "https://github.com/dantegarcia654/frame-mcp",
+  "license": "MIT",
+  "keywords": ["video-editing", "interactive-visuals", "mcp", "chatgpt"],
+  "extensions": { "com.openai": { "interface": {
+    "displayName": "FRAME",
+    "shortDescription": "Interactive visual editor in ChatGPT",
+    "longDescription": "Open an editable visual scene inside ChatGPT, manipulate scene controls, track editing operations, and work with project versions. Current release is procedural, not production video generation.",
+    "developerName": "FRAME",
+    "category": "Productivity",
+    "capabilities": ["Read"],
+    "websiteURL": "https://frame-mcp-gateway.lovable.app",
+    "brandColor": "#0B1118",
+    "defaultPrompt": ["Open FRAME to create an interactive rocket scene.", "Use FRAME to preview and edit a visual scene."]
+  } } }
+}

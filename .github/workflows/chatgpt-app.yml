@@ -1,0 +1,26 @@
+name: FRAME ChatGPT MCP App
+on:
+  pull_request:
+    paths:
+      - 'src/chatgpt-app.js'
+      - 'mobile/index.html'
+      - 'test/chatgpt-app-smoke.js'
+      - 'package.json'
+      - '.github/workflows/chatgpt-app.yml'
+  push:
+    branches:
+      - feature/frame-mobile-live-scenes
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - run: node --check src/chatgpt-app.js
+      - run: node --check test/chatgpt-app-smoke.js
+      - run: npm run test:chatgpt
