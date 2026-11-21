@@ -1,0 +1,34 @@
+name: Creator first-day activation
+on:
+  pull_request:
+    paths:
+      - 'scripts/creator-activation.mjs'
+      - '.github/workflows/creator-activation.yml'
+  workflow_dispatch:
+
+jobs:
+  first-day:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Check script syntax
+        run: node --check scripts/creator-activation.mjs
+      - name: Prepare isolated sample footage
+        run: |
+          mkdir -p /tmp/frame-activation
+          ffmpeg -v error -y -f lavfi -i testsrc2=size=320x180:rate=30:duration=5 -f lavfi -i sine=frequency=440:duration=5 -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/frame-activation/sample.mp4
+      - name: Test first-day editing journey
+        run: node scripts/creator-activation.mjs /tmp/frame-activation/sample.mp4 /tmp/frame-activation/results
+      - name: Attach activation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frame-creator-activation
+          path: /tmp/frame-activation/results/
+          if-no-files-found: warn
