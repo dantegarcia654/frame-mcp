@@ -1,3 +1,4 @@
+import { MOVE_CURVES } from './clip-move.js';
 import { BRAND_ASSETS } from './official-brand-assets.js';
 // Declarative graphics: data only, shared by the editor and export. No eval, network or wall clock.
 // Every node is one named object a person can click. Motion is data too: `anim` keyframes (clip-local seconds)
@@ -6,7 +7,11 @@ const KINDS = new Set(['rect', 'line', 'text', 'invader', 'slider', 'brand', 'pi
 const COLORS = /^#[0-9a-f]{6}$/i;
 const finite = (v, name, lo, hi) => { if (!Number.isFinite(v) || v < lo || v > hi) throw new Error(`${name} must be finite, ${lo}–${hi}`); };
 const allowed = new Set(['id','kind','x','y','w','h','at','until','fade','fadeOut','color','fill','fill2','stroke','lineWidth','dash','radius','text','size','font','weight','align','shadow','reveal','cues','highlightAt','accent','edge','eye','speed','phase','value','asset','motion','anim','hz','spin','from','to','pad','rows','pal','tall','flip']);
-export const EASES = { lin: x => x, out: x => 1 - (1 - x) ** 3, in: x => x ** 3, io: x => x < .5 ? 4 * x ** 3 : 1 - (-2 * x + 2) ** 3 / 2, back: x => { const c = 1.7; return 1 + (c + 1) * (x - 1) ** 3 + c * (x - 1) ** 2; }, step: x => (x >= 1 ? 1 : 0) };
+export const EASES = {
+  ...MOVE_CURVES,
+  back: x => { const c = 1.7; return 1 + (c + 1) * (x - 1) ** 3 + c * (x - 1) ** 2; },
+  step: x => x >= 1 ? 1 : 0,
+};
 const ANIM_KEYS = { x: [-3, 3], y: [-3, 3], s: [0, 20], a: [0, 1], r: [-100, 100], p: [0, 1] };
 const REVEALS = ['none', 'type', 'words', 'wipe', 'wipeup', 'wipedown', 'tiles'];
 
@@ -72,7 +77,7 @@ export function validateNodes(nodes) {
         for (const k of Object.keys(f)) if (k !== 't' && k !== 'e' && !ANIM_KEYS[k]) throw new Error(`Unknown keyframe property ${k}`);
         finite(f.t, 'keyframe t', 0, 86400); if (i && f.t < n.anim[i - 1].t) throw new Error('Keyframes must be in time order');
         for (const [k, [lo, hi]] of Object.entries(ANIM_KEYS)) if (f[k] != null) finite(f[k], `keyframe ${k}`, lo, hi);
-        if (f.e != null && !EASES[f.e]) throw new Error(`Unknown ease ${f.e}`);
+        if (f.e != null && !Object.hasOwn(EASES, f.e)) throw new Error(`Unknown ease ${f.e}`);
       });
     }
     if (n.rows != null && (!Array.isArray(n.rows) || !n.rows.length || n.rows.length > 64 || n.rows.some((r) => typeof r !== 'string' || r.length > 64 || !/^[.\w#]*$/.test(r)))) throw new Error('Sprite rows must be up to 64 strings of up to 64 pixel characters');

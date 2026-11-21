@@ -19,7 +19,7 @@ export function validateReframe(value) {
     }
     if (!Number.isFinite(zoom) || zoom < 1 || zoom > 3 ||
         ![x, y].every(v => Number.isFinite(v) && v >= 0 && v <= 1) || !MOVE_EASES.includes(e)) {
-      throw new Error('Each reframe needs zoom 1–3, source x/y 0–1, and ease lin, in, out, or io.');
+      throw new Error(`Each reframe needs zoom 1–3, source x/y 0–1, and an ease from ${MOVE_EASES.join(', ')}.`);
     }
     return { t, zoom, x, y, e };
   }) };

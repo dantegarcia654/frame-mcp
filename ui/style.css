@@ -95,7 +95,8 @@ aside { background: var(--p); display: flex; flex-direction: column; min-height:
 .f.system { color: var(--dim2); }
 #composer { border-top: 1px solid var(--line); padding: 9px 12px 10px; }
 #composer textarea { width: 100%; background: #000; border: 1px solid var(--line2); border-radius: 3px; padding: 7px 9px; resize: none; user-select: text; display: block; }
-#composer div { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; gap: 8px; font-size: 11px; }
+#composer #pending { display: block; margin-top: 6px; font-size: 11px; }
+#composer div { display: flex; justify-content: flex-end; align-items: center; margin-top: 6px; gap: 8px; font-size: 11px; }
 
 #timeline { border-top: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--p); }
 #tlbar { display: flex; align-items: center; gap: 12px; padding: 5px 12px; border-bottom: 1px solid var(--line); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }

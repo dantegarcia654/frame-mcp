@@ -65,8 +65,12 @@
       <h3>Activity <span class="dim" id="feedHint">timeline and tool calls</span></h3>
       <div id="feed"></div>
       <form id="composer">
-        <textarea rows="2" placeholder="Tell Claude what to change…  (Enter to send)"></textarea>
-        <div><span class="dim" id="pending">Claude reads this at its next step.</span><button class="solid">Send</button></div>
+        <textarea rows="2" aria-label="What should change?" placeholder="Describe a change…"></textarea>
+        <span class="dim" id="pending" role="status"></span>
+        <div>
+          <button id="sendAgent" type="submit" title="Queue this message for the connected editing agent">Send to agent</button>
+          <button id="sendCanvas" type="submit" class="solid">Send to canvas</button>
+        </div>
       </form>
     </aside>
   </main>

@@ -1,3 +1,5 @@
+import { MOVE_EASES } from '../ui/clip-move.js';
+
 // What Claude sees. These descriptions are the whole contract between Claude and Frame.
 export const INSTRUCTIONS = `Frame is a live editing room. The user watches a real timeline fill in while you edit, and can stop, steer or hand-edit at any moment.
 
@@ -8,7 +10,7 @@ How to work:
 2. frame_import the footage. Frame measures it (duration, loudness, silences) and returns the numbers. If the result includes a decision sheet (model-guessed role, hook and steadiness per clip), plan from it instead of viewing every clip, and frame_view only the clips marked REVIEW. frame_decide asks your own questions across many clips at once. For a templated story cut, frame_swarm builds it in seconds; then direct it (strips → direct) before showing it.
 3. To cut dead air / silences / pauses, call frame_cut_silence — one call, never hand-built. frame_transcribe for speech. Use frame_view to actually look at frames.
 4. Think out loud with frame_note (kind "thinking" / "decision") — short, specific, one idea each. This is what removes the black box; do it before each batch of edits.
-5. Change the timeline ONLY through frame_edit. Give each op a "why". Prefer several small batches over one giant one, so the user can interrupt.
+5. Change the timeline ONLY through frame_edit. For combined camera and title motion, send the crop and graphic changes in one fast batch without preview_at. Keep the source and unaffected beats locked. See docs/MOTION-BEATS.md for an editable example. Give each op a "why". Prefer several small batches over one giant one, so the user can interrupt.
 6. Audio you use (a soundtrack, sound effects) gets saved with frame_pack save, so it lives inside Frame as a reusable pack. If you do anything outside Frame (a custom ffmpeg/python script, an AI generation, a download), wrap it in frame_step: call it with status "running" and the exact command/code before you run it, and status "done" with output file paths after. Outputs are imported automatically.
 7. Effects (clone row, text behind the person, orbiting text, rack focus, code body, letter window, tracking box, impact frame, comment drop, blow away, agent swarm) are clips too: frame_effects lists them and their settings; effects that need the person cut out need frame_cutout on that footage first. Add them with frame_edit add_effect — never fake an effect with an outside script.
 8. frame_view the composited result at a few timestamps before you render. frame_render when it is right.
@@ -60,7 +62,7 @@ export const TOOLS = [
           zoom: { type: 'number', minimum: 1, maximum: 3 },
           x: { type: 'number', minimum: 0, maximum: 1 },
           y: { type: 'number', minimum: 0, maximum: 1 },
-          e: { type: 'string', enum: ['lin', 'in', 'out', 'io'] },
+          e: { type: 'string', enum: MOVE_EASES },
         },
       } },
       replace_motion: { type: 'boolean', description: 'Explicitly replace existing position keyframes. Defaults to false.' },
@@ -140,7 +142,7 @@ Ops:
 • add_effects_at_words {stop?, params?, only?, max?, min?, track?, source_track?} — the effects-reel recipe in one op: the person says each effect's name (its cue words, listed by frame_effects) and that effect starts on the word, running until the next cue or a stop word (e.g. stop:["comment"] for a call to action), at most max seconds (default 3). params:{blow_away:{plate:"a2"}} sets per-effect settings. Reports what it placed, what it heard, and which effects were never said.
 • add_agent_swarm {track?, source_track?, params?} — draws the agents that made the edit over the video (an agent_swarm effect on V3): each agent's cursor and coloured tag flies to the effect it placed, boxes it and holds it while it plays. Built from the edit history, so give each effect op an agent label. Rebuild it after changing effects.
 • name_track {track,name} — label a timeline layer.
-• patch_graphic {id,node_id,patch} — change a named live graphic layer (text, color, position, geometry, animation cues). Validated, undoable, immediately previewed; never encodes a video.
+• patch_graphic {id,node_id,patch} — change a named live graphic layer (text, color, position, geometry, animation cues such as at and anim; out is cubic ease-out and out4 is quartic ease-out). Validated, undoable, immediately previewed; never encodes a video.
 • add_effect {effect, start, duration?, params?, track?, source?} — an effect clip (default 1.5 s on V2, reading V1). frame_effects lists the effects and their settings; change settings later with update_clip {id, params:{…}}. Effects marked [needs a cutout] need frame_cutout on the footage under them first.
 • add_captions {source_track?, max_words?, max_chars?, style?, track?, replace?} — builds captions from the transcript, following every cut. Or pass phrases:[{text,start,end}] in timeline seconds.
 • style_text {track?, style, all?} — restyle every caption on a track in one go (all: true includes non-caption text).

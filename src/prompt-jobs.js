@@ -47,7 +47,7 @@ function titleRoute(prompt, clips, playhead) {
  return { clip_id: matches[0].id, property: 'text', value, provider: 'local-title', api_ms: 0 };
 }
 async function decide(prompt,list,playhead){
- const cfg=decisionsConfig();if(!cfg.on)throw new Error('Connect Google Decisions, or use element-id: control=value.');
+ const cfg=decisionsConfig();if(!cfg.on)throw new Error('Canvas language routing needs Google Decisions.');
  const start=performance.now();
  const criteria=Object.fromEntries(list.map(c=>[c.id,`${c.label}; ${c.effect.params.nodes[0].kind}; ${c.effect.params.nodes[0].id}; timeline ${c.start.toFixed(1)}s`]));criteria.none='No single matching element, ambiguous, or unsupported request';
  const questions={target:{type:'choice',instructions:'Pick the one existing graphic element the user explicitly wants to revise. If ambiguous choose none.',criteria},property:{type:'choice',instructions:'Which one graphic control is requested? Do not infer other edits.',criteria:controls},direction:{type:'choice',instructions:'Choose the requested numeric direction, or set for a requested exact color, wording or value.',criteria:{increase:'Bigger, faster, right, lower or rounder',decrease:'Smaller, slower, left, higher or sharper',set:'Set a named color, exact number or quoted wording',none:'No clear supported request'}},color:{type:'choice',instructions:'Only pick a color if the user explicitly named it. Otherwise none.',criteria:{...Object.fromEntries(Object.keys(palette).map(k=>[k,k])),none:'No named color'}},tone:{type:'choice',instructions:'Only if the user asks for a darker or lighter shade of a color.',criteria:{darker:'A darker or deeper shade',lighter:'A lighter or paler shade',none:'No shade change requested'}}};
