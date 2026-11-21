@@ -8,11 +8,17 @@ import http from 'node:http';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'frame-test-'));
-const env = { ...process.env, FRAME_PORT: '4791', FRAME_HOME: path.join(tmp, 'home'), FRAME_NO_OPEN: '1', FRAME_PACE: '0',
-  FRAME_PROFILES: path.join(tmp, 'profiles'), FRAME_APPROVED_DIR: path.join(tmp, 'approved'), FRAME_INBOX_DIR: path.join(tmp, 'inbox'), FRAME_INBOX_URL: 'http://127.0.0.1:4797',
+// Allocate scratch ports instead of colliding with other local review runs.
+const freePort = () => new Promise((resolve, reject) => {
+  const server = http.createServer(); server.once('error', reject);
+  server.listen(0, '127.0.0.1', () => { const port = server.address().port; server.close(() => resolve(port)); });
+});
+const [servicePort, decisionPort, inboxPort] = await Promise.all([freePort(), freePort(), freePort()]);
+const env = { ...process.env, FRAME_PORT: String(servicePort), FRAME_HOME: path.join(tmp, 'home'), FRAME_NO_OPEN: '1', FRAME_PACE: '0',
+  FRAME_PROFILES: path.join(tmp, 'profiles'), FRAME_APPROVED_DIR: path.join(tmp, 'approved'), FRAME_INBOX_DIR: path.join(tmp, 'inbox'), FRAME_INBOX_URL: `http://127.0.0.1:${inboxPort}`,
   // Decision sheet: always the local mock below, never Google, whatever key the developer has set.
-  GEMINI_API_KEY: 'smoke', FRAME_DECISIONS: '', FRAME_DECISIONS_ENDPOINT: 'http://127.0.0.1:4794/v1beta/decisions' };
-const base = 'http://127.0.0.1:4791';
+  GEMINI_API_KEY: 'smoke', FRAME_DECISIONS: '', FRAME_DECISIONS_ENDPOINT: `http://127.0.0.1:${decisionPort}/v1beta/decisions` };
+const base = `http://127.0.0.1:${servicePort}`;
 let failed = 0;
 const ok = (name, cond, extra = '') => { console.log(`${cond ? '✓' : '✗'} ${name}${extra ? ' — ' + extra : ''}`); if (!cond) failed++; };
 
@@ -42,7 +48,7 @@ const decideMock = http.createServer((req, res) => {
     send(200, { answers, usage: { total_tokens: 321 } });
   });
 });
-await new Promise((r) => decideMock.listen(4794, '127.0.0.1', r));
+await new Promise((r) => decideMock.listen(decisionPort, '127.0.0.1', r));
 const daemon = spawn(process.execPath, [path.join(root, 'bin/frame.js'), 'serve'], { env, stdio: 'ignore' });
 for (let i = 0; i < 40; i++) { try { await fetch(`${base}/api/ping`); break; } catch { await new Promise((r) => setTimeout(r, 100)); } }
 const call = async (name, args = {}) => { const r = await (await fetch(`${base}/api/call`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, arguments: args }) })).json(); return { ...r, text: r.content.map((c) => c.text || '').join('\n') }; };
@@ -190,7 +196,7 @@ try {
   ok('save to library with Frame Inbox not running fails gracefully', /not running/.test(res.error || ''), res.error);
   const http = await import('node:http'); let got = null;
   const inbox = http.createServer((q, s) => { const ch = []; q.on('data', (d) => ch.push(d)); q.on('end', () => { got = { url: q.url, token: q.headers['x-frame-token'], body: Buffer.concat(ch) }; s.writeHead(200, { 'Content-Type': 'application/json' }); s.end('{"ok":true}'); }); });
-  await new Promise((go) => inbox.listen(4797, '127.0.0.1', go));
+  await new Promise((go) => inbox.listen(inboxPort, '127.0.0.1', go));
   res = await ui({ action: 'save_clip', id: s1 });
   inbox.close();
   let sentLen = null; if (got) { const f = path.join(tmp, 'sent.mp4'); fs.writeFileSync(f, got.body); sentLen = Number(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f]).stdout.toString()); }
