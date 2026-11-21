@@ -22,3 +22,10 @@ If the canvas route asks for input, no change was saved. For a compound request,
 PR #21 uses the animated reframe model and renderer from #20. The open stack merges from the bottom up. Merge #17, then #19, then #20, then #21. After each lower PR lands, retarget the next PR to `main` and verify its diff. If a squash or rebase merge removed the original parent history, replay only the next PR's commits onto the landed base before retargeting so the diff stays scoped.
 
 The launch title is a `live_graphic` effect, drawn in the window and via the loopback effect renderer for export. The two failures on #20 and #21 concern ordinary text clips drawn with no window. On the rehearsal machine, Chromium 154's standalone `--dump-dom` invocation timed out on a minimal page as well as on FRAME's caption page. That failure leaves the smoke-test frames without the expected white or red caption pixels. The launch fixture has no ordinary text clips and uses the independently exercised effect renderer. A demo that adds ordinary captions and exports with the window closed still needs its own check.
+
+
+## November 20 export regression fix (Codex)
+
+Quartic-out (`out4`) now has an FFmpeg expression shared by crop and position animation. `node test/motion-export.js` compares all five easing curves against FFmpeg at six points, then renders and fully decodes ten exports (five curves, two motion paths). `npm test` includes that regression. The runtime version is bumped to 1.5.12 so existing services reload the fix.
+
+These checks resolve the demonstrated export failure. The previously referenced `frame-pr21-review-evidence.zip` remains unavailable here; the connected-agent turnaround, continuous playback, audio and filming-readiness claims have not been independently verified in this follow-up. This code fix does not grant filming or final visual acceptance.

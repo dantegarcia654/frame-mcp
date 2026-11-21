@@ -12,7 +12,7 @@ export const MOVE_EASES = Object.keys(MOVE_CURVES);
 
 export const easeProgress = (ease, q) => MOVE_CURVES[ease || 'lin'](q);
 export const easeExpression = (ease, q) => ({
-  lin: q, out: `(1-pow(1-${q},3))`, in: `pow(${q},3)`,
+  lin: q, out: `(1-pow(1-${q},3))`, in: `pow(${q},3)`, out4: `(1-pow(1-${q},4))`,
   io: `if(lt(${q},0.5),4*pow(${q},3),1-pow(-2*${q}+2,3)/2)`,
 }[ease || 'lin']);
 
