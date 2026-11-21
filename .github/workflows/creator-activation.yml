@@ -4,7 +4,14 @@ on:
     paths:
       - 'scripts/creator-activation.mjs'
       - '.github/workflows/creator-activation.yml'
+      - 'bin/**'
+      - 'src/**'
+      - 'ui/**'
+      - 'test/**'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   first-day:
@@ -19,6 +26,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Check script syntax
         run: node --check scripts/creator-activation.mjs
+      - name: Run regression smoke suite
+        run: npm test
       - name: Prepare isolated sample footage
         run: |
           mkdir -p /tmp/frame-activation

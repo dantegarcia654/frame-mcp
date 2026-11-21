@@ -28,3 +28,12 @@ This creates an **isolated Frame home** in a temporary folder, disables optional
 Capture: OS, machine, source resolution/codec/duration, time to first preview, time per revision, render time, failures and workarounds, and whether the creator actually returns the next day. **Unobserved means unverified.**
 
 This gate deliberately excludes background cutouts, optional Gemini Decisions uploads and captions so a failing optional subsystem does not obscure fundamental import/edit/export reliability. Test captions, presets and longer media separately, with explicit creator consent before optional third-party uploads.
+
+
+## November 20 verification follow-up (Codex)
+
+The original GitHub Actions job did not start: its annotation reports an account billing lock. This is an infrastructure block, not a test failure from the script. Hosted verification remains pending until account access is restored.
+
+Local smoke checks passed, including caption/effect raster checks through an adapter attached only to the allocated agent-owned Chrome session. This does not certify the standalone headless launcher. The activation gate passed on synthetic footage, including repeated runs preserving earlier exports, and rejects audio-only input. It now verifies that the exported duration includes the requested trim and fully decodes the MP4. Each run uses a separate render folder.
+
+The public flower-footage export already attached to PR #20 was also used as a non-synthetic media fixture; this is derived footage, not an unassisted creator installation or original-camera-media acceptance. No recording or paid model call was made. The existing real creator/MCP installation acceptance requirement remains open.

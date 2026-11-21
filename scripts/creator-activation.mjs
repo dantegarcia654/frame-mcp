@@ -23,9 +23,12 @@ for (const cmd of ['ffmpeg', 'ffprobe']) {
     process.exit(2);
   }
 }
-const probe = external('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', source]);
-const duration = Number(probe.stdout.trim());
-if (probe.status !== 0 || !Number.isFinite(duration) || duration < 2) {
+const probe = external('ffprobe', ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type,width,height,r_frame_rate', '-of', 'json', source]);
+let sourceInfo = {};
+try { sourceInfo = JSON.parse(probe.stdout); } catch {}
+const video = sourceInfo.streams?.find(s => s.codec_type === 'video' && s.width > 0 && s.height > 0);
+const duration = Number(sourceInfo.format?.duration);
+if (probe.status !== 0 || !video || !Number.isFinite(duration) || duration < 2) {
   console.error('Use a readable video of at least two seconds for the first-run gate.');
   process.exit(2);
 }
@@ -43,7 +46,7 @@ const env = {
   FRAME_PACE: '0',
   FRAME_DECISIONS: 'off',
 };
-const evidence = { source, output, operations: [], limitations: ['Local tool-path gate, not a test of AI-client MCP registration or creator UX', 'No promise of 30-second full export or unlimited-footage indexing'] };
+const evidence = { source, output, sampleKind: 'caller-supplied; synthetic samples do not establish creator acceptance', operations: [], limitations: ['Local tool-path gate, not a test of AI-client MCP registration or creator UX', 'No promise of 30-second full export or unlimited-footage indexing'] };
 function frame(name, args, limitMs = 180_000) {
   const start = performance.now();
   const run = spawnSync(process.execPath, [executable, 'call', name, JSON.stringify(args)], {
@@ -57,8 +60,12 @@ function frame(name, args, limitMs = 180_000) {
   }
   return run.stdout;
 }
+let renderDir;
 try {
   fs.mkdirSync(output, { recursive: true });
+  // Each run owns its render folder; rerunning never overwrites earlier evidence/media.
+  renderDir = fs.mkdtempSync(path.join(output, 'run-'));
+  evidence.renderDirectory = renderDir;
   frame('frame_start', { name: 'Creator activation check', aspect: '9:16' });
   const imported = frame('frame_import', { paths: [source], prepare: false, decide: false, scenes: false });
   assert.match(imported, /a1\b/, 'First imported asset not identified as a1');
@@ -73,15 +80,23 @@ try {
     fast: true, ops: [{ op: 'trim_clip', id: match[1], edge: 'end', by: 0.5, why: 'Creator asks for a tighter cut' }],
   });
   assert.match(revision, /✓/, 'Revision did not report success');
-  const existing = new Set(fs.readdirSync(output).filter(f => /\.mp4$/i.test(f)));
-  const rendered = frame('frame_render', { quality: 'draft', output_dir: output, loudnorm: false }, 600_000);
+  const existing = new Set(fs.readdirSync(renderDir).filter(f => /\.mp4$/i.test(f)));
+  const rendered = frame('frame_render', { quality: 'draft', output_dir: renderDir, loudnorm: false }, 600_000);
   assert.match(rendered, /Rendered:/, 'FRAME did not report a successful render');
-  const files = fs.readdirSync(output).filter(f => /\.mp4$/i.test(f) && !existing.has(f)).map(f => path.join(output, f));
+  const files = fs.readdirSync(renderDir).filter(f => /\.mp4$/i.test(f) && !existing.has(f)).map(f => path.join(renderDir, f));
   assert.ok(files.length, `Render returned without an MP4: ${rendered.slice(-1200)}`);
   const newest = files.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
-  const check = external('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', newest]);
+  const check = external('ffprobe', ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type,width,height', '-of', 'json', newest]);
   assert.equal(check.status, 0, 'Final MP4 failed ffprobe');
-  evidence.export = { path: newest, seconds: Number(check.stdout.trim()), bytes: fs.statSync(newest).size };
+  const finalInfo = JSON.parse(check.stdout);
+  const finalVideo = finalInfo.streams?.find(s => s.codec_type === 'video' && s.width > 0 && s.height > 0);
+  const finalDuration = Number(finalInfo.format?.duration);
+  assert.ok(finalVideo && Number.isFinite(finalDuration) && finalDuration > 0, 'Final MP4 has no playable video');
+  const expectedDuration = Math.min(duration, 12) - 0.5;
+  assert.ok(Math.abs(finalDuration - expectedDuration) <= 0.12, `Revision was not reflected in export: expected ${expectedDuration}s, got ${finalDuration}s`);
+  const decode = external('ffmpeg', ['-v', 'error', '-xerror', '-i', newest, '-map', '0:v:0', '-map', '0:a?', '-f', 'null', '-']);
+  assert.equal(decode.status, 0, `Final MP4 did not fully decode: ${decode.stderr}`);
+  evidence.export = { path: newest, seconds: finalDuration, expectedSeconds: expectedDuration, bytes: fs.statSync(newest).size, fullyDecoded: true };
   evidence.passed = true;
   console.log(`PASS: import → first cut → visual check → revision → playable draft export\n${newest}`);
 } catch (error) {
@@ -93,7 +108,7 @@ try {
   const stopped = spawnSync(process.execPath, [executable, 'stop'], { env, encoding: 'utf8', timeout: 10_000 });
   evidence.serviceStop = stopped.status === 0 ? 'attempted' : 'failed';
   const file = path.join(output, 'creator-activation-evidence.json');
-  try { fs.mkdirSync(output, { recursive: true }); fs.writeFileSync(file, JSON.stringify(evidence, null, 2) + '\n'); console.log(`Evidence: ${file}`); }
+  try { fs.mkdirSync(output, { recursive: true }); fs.writeFileSync(file, JSON.stringify(evidence, null, 2) + '\n'); if (renderDir) fs.writeFileSync(path.join(renderDir, 'creator-activation-evidence.json'), JSON.stringify(evidence, null, 2) + '\n'); console.log(`Evidence: ${file}`); }
   catch (e) { console.error(`Could not save evidence: ${e.message}`); process.exitCode = 1; }
   fs.rmSync(scratch, { recursive: true, force: true });
 }
